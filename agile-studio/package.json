@@ -1,0 +1,24 @@
+{
+  "name": "agile-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "node server/index.js",
+    "web": "vite --config web/vite.config.js",
+    "dev": "concurrently -k -n SERVER,WEB -c cyan,magenta \"npm:server\" \"npm:web\"",
+    "build": "vite build --config web/vite.config.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.5"
+  }
+}
