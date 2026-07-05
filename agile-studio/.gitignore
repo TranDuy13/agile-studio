@@ -1,3 +1,13 @@
 node_modules/
 web/dist/
+
+# secrets / local config
 bot.config.json
+accounts.json
+
+# per-user generated data (keep .skill/ — it's the shareable skill pack)
+projects/
+requirements/
+
+# os
+.DS_Store
