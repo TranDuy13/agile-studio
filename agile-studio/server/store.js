@@ -14,6 +14,7 @@ function read() {
   if (!d.logs) d.logs = {};         // migrate file cũ
   if (!d.sessions) d.sessions = {};
   if (!d.sessionLogs) d.sessionLogs = {};
+  if (!d.schedules) d.schedules = {};
   return d;
 }
 function write(d) { writeFileSync(FILE, JSON.stringify(d, null, 2)); }
@@ -102,11 +103,18 @@ export const store = {
     write(d);
   },
 
+  // Lịch chạy feature (schedule).
+  listSchedules() { return Object.values(read().schedules || {}); },
+  getSchedule(id) { return read().schedules?.[id]; },
+  saveSchedule(sc) { const d = read(); (d.schedules ||= {})[sc.id] = sc; write(d); return sc; },
+  deleteSchedule(id) { const d = read(); if (d.schedules) delete d.schedules[id]; write(d); },
+
   // Cấu hình chung (model + tiết kiệm token).
   getSettings() {
     const s = read().settings || {};
     return { model: s.model || "", economy: s.economy !== false, maxBudgetUsd: Number(s.maxBudgetUsd) || 0,
-      slackWebhook: s.slackWebhook || "", preferredAccount: s.preferredAccount || "",
+      slackWebhook: s.slackWebhook || "", discordWebhook: s.discordWebhook || "",
+      preferredAccount: s.preferredAccount || "",
       switchThreshold: Number(s.switchThreshold) || 90, allowCommands: s.allowCommands !== false };
   },
   setSettings(patch) {

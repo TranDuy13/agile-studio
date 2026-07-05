@@ -6,6 +6,7 @@ import UsageModal from "./UsageModal.jsx";
 export default function AccountBadge({ event }) {
   const [data, setData] = useState({ active: null, accounts: [] });
   const [adding, setAdding] = useState(false);
+  const [relogin, setRelogin] = useState(null); // account cần đăng nhập lại
   const [viewing, setViewing] = useState(null); // account đang xem usage chi tiết
   const [busy, setBusy] = useState(null); // id đang refresh, hoặc "all"
   // Chỉ nạp DANH SÁCH account (không gọi API usage). Giữ lại % usage đã fetch trước đó.
@@ -65,8 +66,13 @@ export default function AccountBadge({ event }) {
             <div className="acct-row">
               <span className="acct-dot" data-on={on} />
               <button className="acct-label" onClick={() => setViewing(a)} title="Xem usage chi tiết">{a.label}</button>
-              {a.disabled ? <span className="acct-off-tag">đã tắt</span> : on && <span className="acct-active">đang dùng</span>}
+              {a.disabled ? <span className="acct-off-tag">đã tắt</span>
+                : a.loggedIn === false ? <span className="acct-expired">hết hạn</span>
+                : on && <span className="acct-active">đang dùng</span>}
               <div className="acct-acts">
+                {!a.disabled && a.loggedIn === false && (
+                  <button className="acct-btn relogin" title="Token hết hạn — đăng nhập lại" onClick={() => setRelogin(a)}>🔑</button>
+                )}
                 {!a.disabled && (
                   <button className={"acct-btn star" + (data.preferred === a.id ? " on" : "")}
                     onClick={() => setPreferred(a.id)}
@@ -97,6 +103,7 @@ export default function AccountBadge({ event }) {
         <div className="acct-toast warn">⚠ Các account gần cạn quota</div>
       )}
       <AccountLogin open={adding} onClose={() => setAdding(false)} onDone={load} />
+      <AccountLogin open={!!relogin} relogin={relogin} onClose={() => setRelogin(null)} onDone={load} />
       <UsageModal open={!!viewing} account={viewing} onClose={() => setViewing(null)} />
     </div>
   );

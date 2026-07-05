@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 import { store } from "./store.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 const pexecFile = promisify(execFile);
 import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn } from "./accounts.js";
-import { runClaude, ROLE_ORDER, ROLE_META } from "./runner.js";
+import { runClaude, runClaudeStream, copySessionTranscript, killChild, ROLE_ORDER, ROLE_META } from "./runner.js";
 import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOutputs,
   saveSkill, listDocs, readDoc, writeDoc } from "./scaffold.js";
 
@@ -36,19 +37,50 @@ let SEQ = 0;
 const MAX_KEEP = 40;        // giữ tối đa N session gần nhất trong bộ nhớ
 
 // ---- REST ----
-// Mở hộp thoại chọn folder native (macOS) và trả về đường dẫn tuyệt đối.
+// Mở hộp thoại chọn folder native theo HĐH và trả về đường dẫn tuyệt đối.
+async function pickFolderNative() {
+  const prompt = "Chọn folder repo của project";
+  if (process.platform === "darwin") {
+    try {
+      const { stdout } = await pexecFile("osascript", ["-e", `POSIX path of (choose folder with prompt "${prompt}")`]);
+      let p = stdout.trim();
+      if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+      return p || null;
+    } catch { return null; } // user cancel
+  }
+  if (process.platform === "win32") {
+    const ps = 'Add-Type -AssemblyName System.Windows.Forms | Out-Null; '
+      + '$d = New-Object System.Windows.Forms.FolderBrowserDialog; '
+      + `$d.Description = "${prompt}"; `
+      + 'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }';
+    try {
+      const { stdout } = await pexecFile("powershell.exe", ["-NoProfile", "-STA", "-Command", ps], { windowsHide: true });
+      return stdout.trim() || null;
+    } catch { return null; }
+  }
+  // Linux: thử zenity rồi kdialog
+  for (const [cmd, args] of [
+    ["zenity", ["--file-selection", "--directory", `--title=${prompt}`]],
+    ["kdialog", ["--getexistingdirectory", process.env.HOME || "."]],
+  ]) {
+    try { const { stdout } = await pexecFile(cmd, args); return stdout.trim() || null; }
+    catch (e) { if (e.code === "ENOENT") continue; return null; } // ENOENT: chưa cài -> thử cái kế; khác: cancel
+  }
+  throw new Error("Không có hộp thoại chọn folder (cài zenity/kdialog) — nhập đường dẫn thủ công.");
+}
+
 app.post("/api/pick-folder", async (req, res) => {
-  if (process.platform !== "darwin")
-    return res.status(400).json({ error: "Chọn folder native chỉ hỗ trợ macOS — nhập đường dẫn thủ công.", manual: true });
   try {
-    const { stdout } = await pexecFile("osascript", ["-e", 'POSIX path of (choose folder with prompt "Chọn folder repo của project")']);
-    let path = stdout.trim();
-    if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1); // bỏ dấu / cuối
+    const path = await pickFolderNative();
+    if (!path) return res.json({ canceled: true });
     res.json({ path });
-  } catch {
-    res.json({ canceled: true }); // user bấm Cancel
+  } catch (e) {
+    res.status(400).json({ error: String(e.message), manual: true });
   }
 });
+
+// HĐH server (để UI hiển thị gợi ý đúng).
+app.get("/api/platform", (req, res) => res.json({ platform: process.platform }));
 
 app.get("/api/projects", (req, res) => res.json(store.listProjects()));
 app.post("/api/projects", (req, res) => {
@@ -121,6 +153,7 @@ app.get("/api/accounts", async (req, res) => {
   const list = loadAccounts();
   const accts = await Promise.all(list.map(async (a) => ({
     id: a.id, label: a.label, disabled: !!a.disabled,
+    loggedIn: await isLoggedIn(a.configDir), // false = chưa login / token hết hạn -> cho nút đăng nhập lại
     usage: withUsage ? await fetchUsage(a.configDir) : null,
   })));
   const cfg = store.getSettings();
@@ -138,9 +171,11 @@ const logins = new Map(); // loginId -> { child, buf, id, label, configDir, done
 
 // Bắt đầu login: spawn `claude auth login`, bắt URL để user mở & lấy code.
 app.post("/api/accounts/login/start", (req, res) => {
-  const label = String(req.body.label || "Account").slice(0, 40);
-  const id = "acc-" + Date.now().toString(36);
-  const configDir = newAccountConfigDir(id);
+  // accountId -> ĐĂNG NHẬP LẠI vào account cũ (dùng configDir cũ); không có -> tạo account mới.
+  const relogin = req.body.accountId ? loadAccounts().find((a) => a.id === req.body.accountId) : null;
+  const label = relogin ? relogin.label : String(req.body.label || "Account").slice(0, 40);
+  const id = relogin ? relogin.id : "acc-" + Date.now().toString(36);
+  const configDir = relogin ? relogin.configDir : newAccountConfigDir(id);
   let child;
   try { child = spawn("claude", ["auth", "login", "--claudeai"], { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } }); }
   catch (e) { return res.status(500).json({ error: "Không chạy được claude: " + String(e.message) }); }
@@ -233,19 +268,20 @@ app.put("/api/settings", (req, res) => {
   if (typeof req.body.economy === "boolean") patch.economy = req.body.economy;
   if (req.body.maxBudgetUsd !== undefined) patch.maxBudgetUsd = Math.max(0, Number(req.body.maxBudgetUsd) || 0);
   if (typeof req.body.slackWebhook === "string") patch.slackWebhook = req.body.slackWebhook.trim();
+  if (typeof req.body.discordWebhook === "string") patch.discordWebhook = req.body.discordWebhook.trim();
   if (typeof req.body.preferredAccount === "string") patch.preferredAccount = req.body.preferredAccount;
   if (req.body.switchThreshold !== undefined) patch.switchThreshold = Math.min(100, Math.max(1, Number(req.body.switchThreshold) || 90));
   if (typeof req.body.allowCommands === "boolean") patch.allowCommands = req.body.allowCommands;
   res.json(store.setSettings(patch));
 });
 
-// Thông báo Slack (nếu đã cấu hình webhook). Desktop notification xử lý ở frontend.
+// Thông báo Slack + Discord (webhook). Desktop notification xử lý ở frontend. Bot Discord xử lý riêng.
 async function notify(text) {
-  const { slackWebhook } = store.getSettings();
-  if (!slackWebhook) return;
-  try {
-    await fetch(slackWebhook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-  } catch { /* bỏ qua lỗi mạng */ }
+  const { slackWebhook, discordWebhook } = store.getSettings();
+  const jobs = [];
+  if (slackWebhook) jobs.push(fetch(slackWebhook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }));
+  if (discordWebhook) jobs.push(fetch(discordWebhook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: text }) }));
+  try { await Promise.all(jobs); } catch { /* bỏ qua lỗi mạng */ }
 }
 
 // Thư viện skill tổng (.skill/) — xem & sửa trên UI.
@@ -286,8 +322,10 @@ function sessionPublic(s) {
   return {
     id: s.id, projectId: s.projectId, projectName: s.projectName, feature: s.feature,
     roles: s.roles, model: s.model, economy: s.economy, maxBudgetUsd: s.maxBudgetUsd,
-    status: s.status, activeAccount: s.activeAccount, startedAt: s.startedAt,
-    requirementId: s.requirementId || null, saveLog: !!s.saveLog,
+    status: s.status, activeAccount: s.activeAccount, startedAt: s.startedAt, cost: s.cost || 0,
+    requirementId: s.requirementId || null, saveLog: !!s.saveLog, liveMode: !!s.liveMode,
+    streamLog: !!s.streamLog, threadId: s.threadId || null,
+    queue: (s.queue || []).map((q) => ({ id: q.id, text: q.text, roles: q.roles || [], applied: !!q.applied })),
     error: s.error || null, resumable: s.status === "error" || s.status === "stopped",
     nodes: nodesPublic(s),
   };
@@ -297,7 +335,8 @@ function persist(s) {
   store.saveSession({
     id: s.id, projectId: s.projectId, projectName: s.projectName, repoPath: s.repoPath,
     feature: s.feature, roles: s.roles, model: s.model, economy: s.economy, maxBudgetUsd: s.maxBudgetUsd,
-    note: s.note || "", requirementId: s.requirementId || null, saveLog: !!s.saveLog,
+    note: s.note || "", requirementId: s.requirementId || null, saveLog: !!s.saveLog, liveMode: !!s.liveMode,
+    streamLog: !!s.streamLog, threadId: s.threadId || null, queue: s.queue || [],
     status: s.status, activeAccount: s.activeAccount, startedAt: s.startedAt, updatedAt: Date.now(),
     error: s.error || null, nodes: s.nodes,
   });
@@ -307,7 +346,7 @@ function reconstruct(slim) {
   const nodes = {};
   for (const rid of ROLE_ORDER)
     nodes[rid] = slim.nodes?.[rid] || { status: slim.roles.includes(rid) ? "pending" : "disabled", activity: "" };
-  return { ...slim, runSet: new Set(slim.roles), currentChild: null, cancelRequested: false, nodes };
+  return { ...slim, queue: slim.queue || [], runSet: new Set(slim.roles), currentChild: null, cancelRequested: false, nodes };
 }
 const WATCH_MS = 45000; // chu kỳ theo dõi usage khi 1 node đang chạy
 
@@ -364,28 +403,27 @@ app.get("/api/sessions/:sid/logs", (req, res) => res.json(store.listSessionLogs(
 app.patch("/api/sessions/:sid", (req, res) => {
   const s = sessions.get(req.params.sid);
   if (!s) return res.status(404).json({ error: "Không thấy session" });
-  if (typeof req.body.saveLog === "boolean") { s.saveLog = req.body.saveLog; persist(s); }
+  if (typeof req.body.saveLog === "boolean") s.saveLog = req.body.saveLog;
+  if (typeof req.body.streamLog === "boolean") s.streamLog = req.body.streamLog;
+  if (typeof req.body.threadId === "string") s.threadId = req.body.threadId; // bot ghi lại thread đã tạo
+  persist(s);
   broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
-  res.json({ ok: true, saveLog: s.saveLog });
+  res.json({ ok: true, saveLog: s.saveLog, streamLog: s.streamLog });
 });
 
-app.post("/api/projects/:id/run", (req, res) => {
-  const project = store.getProject(req.params.id);
-  if (!project) return res.status(404).json({ error: "Không thấy project" });
-  const feature = req.body.feature || "";
-  const roles = Array.isArray(req.body.roles) && req.body.roles.length
-    ? ROLE_ORDER.filter((r) => req.body.roles.includes(r)) : ROLE_ORDER;
-  // override per-run (từ modal), fallback cấu hình chung
+// Tạo + khởi động 1 session. Dùng chung cho /run và scheduler.
+function startSession(project, body = {}) {
+  const feature = body.feature || "";
+  const roles = Array.isArray(body.roles) && body.roles.length
+    ? ROLE_ORDER.filter((r) => body.roles.includes(r)) : ROLE_ORDER;
   const cfg = store.getSettings();
-  const model = typeof req.body.model === "string" ? req.body.model.trim() : cfg.model;
-  const economy = typeof req.body.economy === "boolean" ? req.body.economy : cfg.economy;
-  const maxBudgetUsd = req.body.maxBudgetUsd !== undefined
-    ? Math.max(0, Number(req.body.maxBudgetUsd) || 0) : cfg.maxBudgetUsd;
-
-  // Nếu chạy để phân tích 1 requirement: gắn requirementId + dựng note kèm nội dung & file đính kèm.
-  const requirementId = req.body.requirementId ? Number(req.body.requirementId) : null;
-  const saveLog = req.body.saveLog === true; // mặc định tắt — chỉ lưu log khi user bật
-  let note = typeof req.body.note === "string" ? req.body.note : "";
+  const model = typeof body.model === "string" ? body.model.trim() : cfg.model;
+  const economy = typeof body.economy === "boolean" ? body.economy : cfg.economy;
+  const maxBudgetUsd = body.maxBudgetUsd !== undefined ? Math.max(0, Number(body.maxBudgetUsd) || 0) : cfg.maxBudgetUsd;
+  const requirementId = body.requirementId ? Number(body.requirementId) : null;
+  const saveLog = body.saveLog === true;
+  const liveMode = body.liveMode === true;
+  let note = typeof body.note === "string" ? body.note : "";
   if (requirementId) {
     const rq = store.getRequirement(requirementId);
     if (rq) {
@@ -393,30 +431,97 @@ app.post("/api/projects/:id/run", (req, res) => {
       note = `Đây là PHÂN TÍCH YÊU CẦU MỚI của khách hàng.\nNội dung requirement: "${rq.body}".`
         + (files.length ? `\nĐọc kỹ các file đính kèm (đường dẫn tuyệt đối): ${files.join(", ")}.` : "")
         + `\nPhân tích và cập nhật tài liệu tương ứng; nếu cần, đề xuất/bổ sung 1 feature gấp trong kế hoạch để đáp ứng requirement này.`
-        + (req.body.note ? `\nGhi chú thêm: ${req.body.note}` : "");
+        + (body.note ? `\nGhi chú thêm: ${body.note}` : "");
     }
   }
-
   const runSet = new Set(roles);
   const nodes = {};
   for (const rid of ROLE_ORDER) nodes[rid] = { status: runSet.has(rid) ? "pending" : "disabled", activity: "" };
-  // bắt đầu từ account mặc định nếu đã đặt & đang bật (pickAccount giữ nó tới khi chạm ngưỡng)
   const startAccount = cfg.preferredAccount && enabledAccounts().some((a) => a.id === cfg.preferredAccount)
     ? cfg.preferredAccount : null;
   const s = {
     id: "s" + Date.now().toString(36) + (++SEQ), projectId: project.id, projectName: project.name,
     repoPath: project.repo_path, feature, roles, runSet, model, economy, maxBudgetUsd,
-    note, requirementId, saveLog,
+    note, requirementId, saveLog, liveMode, streamLog: false, threadId: null, queue: [], cost: 0,
     status: "running", activeAccount: startAccount, currentChild: null, cancelRequested: false,
     startedAt: Date.now(), nodes,
   };
   sessions.set(s.id, s);
   persist(s);
   pruneSessions();
-  res.json({ ok: true, session: sessionPublic(s) });
   broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
   launch(s);
+  return s;
+}
+
+app.post("/api/projects/:id/run", (req, res) => {
+  const project = store.getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: "Không thấy project" });
+  const s = startSession(project, req.body);
+  res.json({ ok: true, session: sessionPublic(s) });
 });
+
+// ---- Lên lịch chạy feature (schedule) ----
+// kind: "once" (at = ISO datetime) · "daily" (at = "HH:MM") · "interval" (everyMin phút).
+function computeNext(sc, from = Date.now()) {
+  if (sc.kind === "once") { const t = new Date(sc.at).getTime(); return isNaN(t) ? 0 : t; }
+  if (sc.kind === "daily") {
+    const [h, m] = String(sc.at).split(":").map(Number);
+    const d = new Date(from); d.setHours(h || 0, m || 0, 0, 0);
+    if (d.getTime() <= from) d.setDate(d.getDate() + 1);
+    return d.getTime();
+  }
+  if (sc.kind === "interval") return from + Math.max(1, sc.everyMin || 60) * 60000;
+  return from + 3600000;
+}
+app.get("/api/schedules", (req, res) => res.json(store.listSchedules().sort((a, b) => (a.nextRun || 0) - (b.nextRun || 0))));
+app.post("/api/schedules", (req, res) => {
+  const b = req.body || {};
+  const project = store.getProject(b.projectId);
+  if (!project) return res.status(400).json({ error: "Không thấy project" });
+  if (!(b.feature || "").trim()) return res.status(400).json({ error: "Cần mô tả feature" });
+  const kind = ["once", "daily", "interval"].includes(b.kind) ? b.kind : "once";
+  const roles = Array.isArray(b.roles) && b.roles.length ? ROLE_ORDER.filter((r) => b.roles.includes(r)) : ROLE_ORDER;
+  const sc = {
+    id: "sch" + Date.now().toString(36) + (++SEQ), projectId: Number(b.projectId), projectName: project.name,
+    feature: b.feature.trim(), roles, note: b.note || "", model: b.model || "",
+    kind, at: b.at || "", everyMin: Number(b.everyMin) || 0,
+    enabled: b.enabled !== false, lastRun: null, createdAt: Date.now(),
+  };
+  sc.nextRun = computeNext(sc);
+  if (!sc.nextRun) return res.status(400).json({ error: "Thời gian không hợp lệ" });
+  store.saveSchedule(sc); broadcast({ type: "schedules:changed" });
+  res.json({ ok: true, schedule: sc });
+});
+app.patch("/api/schedules/:id", (req, res) => {
+  const sc = store.getSchedule(req.params.id);
+  if (!sc) return res.status(404).json({ error: "Không thấy lịch" });
+  if (typeof req.body.enabled === "boolean") sc.enabled = req.body.enabled;
+  if (sc.enabled && (!sc.nextRun || sc.nextRun < Date.now())) sc.nextRun = computeNext(sc);
+  store.saveSchedule(sc); broadcast({ type: "schedules:changed" });
+  res.json({ ok: true });
+});
+app.delete("/api/schedules/:id", (req, res) => {
+  store.deleteSchedule(req.params.id); broadcast({ type: "schedules:changed" }); res.json({ ok: true });
+});
+
+setInterval(() => { // mỗi 30s: chạy các lịch đã tới hạn
+  const now = Date.now();
+  for (const sc of store.listSchedules()) {
+    if (!sc.enabled || !sc.nextRun || sc.nextRun > now) continue;
+    const project = store.getProject(sc.projectId);
+    if (project) {
+      try {
+        const s = startSession(project, { feature: sc.feature, roles: sc.roles, note: sc.note, model: sc.model });
+        sc.lastRun = now;
+        broadcast({ type: "schedule:fired", scheduleId: sc.id, session: s.id });
+        notify(`⏰ [${project.name}] Lịch chạy "${sc.feature}" → session \`${s.id}\``);
+      } catch { /* bỏ qua */ }
+    }
+    if (sc.kind === "once") sc.enabled = false; else sc.nextRun = computeNext(sc, now + 1000);
+    store.saveSchedule(sc); broadcast({ type: "schedules:changed" });
+  }
+}, 30000);
 
 function launch(s, resume = false) {
   runSession(s, resume).catch((e) => {
@@ -431,7 +536,7 @@ app.post("/api/sessions/:sid/stop", (req, res) => {
   const s = sessions.get(req.params.sid);
   if (!s) return res.status(404).json({ error: "Không thấy session" });
   s.cancelRequested = true;
-  if (s.currentChild) { try { s.currentChild.kill("SIGTERM"); } catch {} }
+  if (s.currentChild) killChild(s.currentChild);
   broadcast({ type: "flow:stopping", session: s.id });
   res.json({ ok: true });
 });
@@ -441,7 +546,7 @@ app.delete("/api/sessions/:sid", (req, res) => {
   const s = sessions.get(req.params.sid);
   if (s) {
     s.cancelRequested = true;
-    if (s.currentChild) { try { s.currentChild.kill("SIGTERM"); } catch {} }
+    if (s.currentChild) killChild(s.currentChild);
     sessions.delete(s.id);
   }
   store.deleteSession(req.params.sid);
@@ -449,16 +554,105 @@ app.delete("/api/sessions/:sid", (req, res) => {
   res.json({ ok: true });
 });
 
+// Thêm yêu cầu bổ sung vào hàng đợi của 1 session (đang chạy / đã xong / tạm dừng).
+// text: mô tả thêm (nhồi vào prompt). roles: node muốn (re)chạy cho yêu cầu này (vd thêm QC).
+app.post("/api/sessions/:sid/queue", (req, res) => {
+  const s = sessions.get(req.params.sid);
+  if (!s) return res.status(404).json({ error: "Không thấy session" });
+  const text = typeof req.body.text === "string" ? req.body.text.trim() : "";
+  const roles = Array.isArray(req.body.roles) ? ROLE_ORDER.filter((r) => req.body.roles.includes(r)) : [];
+  if (!text && !roles.length) return res.status(400).json({ error: "Cần mô tả hoặc chọn node" });
+  (s.queue ||= []).push({ id: "q" + Date.now().toString(36) + (++SEQ), text, roles, applied: false, createdAt: Date.now() });
+  persist(s);
+  broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
+  // Nếu đang có node chạy TRỰC TIẾP và message hợp lệ cho node đó -> chèn ngay vào stdin (live).
+  if (s.live && (!roles.length || roles.includes(s.live.roleId))) { s.live.inject(); }
+  // Nếu session KHÔNG đang chạy -> khởi động lại, CHỈ chạy đúng node của các queue message này (scoped).
+  else if (s.status !== "running") {
+    const scope = queueTargetRoles(s);
+    s.runScope = scope.size ? scope : null;
+    s.status = "running"; s.cancelRequested = false; s.error = null; persist(s);
+    broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
+    broadcast({ type: "flow:resumed", session: s.id });
+    launch(s, true);
+  }
+  res.json({ ok: true });
+});
+
+// Huỷ 1 queue message CHƯA áp dụng (claude chưa xử lý).
+app.delete("/api/sessions/:sid/queue/:qid", (req, res) => {
+  const s = sessions.get(req.params.sid);
+  if (!s) return res.status(404).json({ error: "Không thấy session" });
+  const item = (s.queue || []).find((q) => q.id === req.params.qid);
+  if (!item) return res.status(404).json({ error: "Không thấy message" });
+  if (item.applied) return res.status(400).json({ error: "Message đã được áp dụng, không huỷ được" });
+  s.queue = s.queue.filter((q) => q.id !== req.params.qid);
+  persist(s);
+  broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
+  res.json({ ok: true });
+});
+
+// Roles đích của các queue message CHƯA áp dụng (để scope relaunch). text-only -> node gần nhất đã chạy.
+function queueTargetRoles(s) {
+  const out = new Set();
+  const last = [...ROLE_ORDER].reverse().find((r) => s.nodes[r]?.claudeSessionId);
+  for (const q of (s.queue || [])) {
+    if (q.applied) continue;
+    const rs = (q.roles || []).filter((r) => ROLE_ORDER.includes(r));
+    if (rs.length) rs.forEach((r) => out.add(r));
+    else if (last) out.add(last);
+  }
+  return out;
+}
+
+// Áp dụng hàng đợi: node đã có hội thoại -> dồn message để --resume (giữ ngữ cảnh, giống VSCode);
+// node chưa chạy -> nhồi mô tả vào note để chạy mới. text-only -> nối vào agent gần nhất.
+function drainQueue(s, flog) {
+  let changed = false;
+  for (const q of (s.queue || [])) {
+    if (q.applied) continue;
+    q.applied = true; changed = true;
+    let roles = (q.roles || []).filter((r) => ROLE_ORDER.includes(r));
+    if (!roles.length && q.text) {
+      const last = [...ROLE_ORDER].reverse().find((r) => s.nodes[r]?.claudeSessionId);
+      if (last) roles = [last]; // mặc định: tiếp tục agent (node) gần nhất
+    }
+    for (const r of roles) {
+      s.runSet.add(r);
+      if (!s.roles.includes(r)) s.roles.push(r);
+      const n = s.nodes[r] || {};
+      if (n.claudeSessionId) {
+        s.nodes[r] = { ...n, status: "pending", activity: "⟳ chờ bổ sung",
+          followup: (n.followup ? n.followup + "\n\n" : "") + (q.text || "Làm tiếp/bổ sung theo yêu cầu.") };
+      } else {
+        s.nodes[r] = { ...n, status: "pending", activity: "⟳ bổ sung" };
+        if (q.text) s.note = (s.note ? s.note + "\n\n" : "") + `[Yêu cầu bổ sung] ${q.text}`;
+      }
+    }
+    if (!roles.length && q.text) s.note = (s.note ? s.note + "\n\n" : "") + `[Ghi chú bổ sung] ${q.text}`;
+    if (s.runScope) roles.forEach((r) => s.runScope.add(r)); // message mới trong lúc scoped -> mở rộng scope
+    flog({ role: "flow", roleName: "Queue", emoji: "➕", kind: "info",
+      text: `Bổ sung${roles.length ? ` → ${roles.join(", ")}` : ""}: ${q.text || "(chạy lại)"}` });
+  }
+  if (changed) {
+    s.roles = ROLE_ORDER.filter((r) => s.roles.includes(r)); // giữ thứ tự pipeline
+    persist(s);
+    broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
+  }
+  return changed;
+}
+
 // Tiếp tục 1 session lỗi/đã dừng: chạy nốt các node CHƯA "done" (sau khi đã /login, đổi account, đợi quota reset…).
 app.post("/api/sessions/:sid/resume", (req, res) => {
   const s = sessions.get(req.params.sid);
   if (!s) return res.status(404).json({ error: "Không thấy session" });
   if (s.status === "running") return res.status(400).json({ error: "Session đang chạy" });
-  s.status = "running"; s.cancelRequested = false; s.error = null;
+  s.status = "running"; s.cancelRequested = false; s.error = null; s.runScope = null; // Tiếp tục = chạy MỌI node pending
   for (const rid of s.roles) if (s.nodes[rid]?.status !== "done") s.nodes[rid] = { ...s.nodes[rid], status: "pending", activity: "" };
   persist(s);
   res.json({ ok: true, session: sessionPublic(s) });
   broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) });
+  broadcast({ type: "flow:resumed", session: s.id }); // để UI cập nhật; KHÔNG notify (chỉ báo xong/lỗi)
   launch(s, true);
 });
 
@@ -477,6 +671,124 @@ async function ensureAccountFor(s) {
     broadcast({ type: "account:switched", session: s.id, to: chosen.id, label: chosen.label, usage: chosen.usage });
   }
   return chosen;
+}
+
+// Chạy 1 node ở CHẾ ĐỘ TRỰC TIẾP: 1 tiến trình sống, chèn message live, tự switch account khi rate-limit
+// (copy transcript sang account mới rồi --resume để giữ ngữ cảnh). Kết thúc khi finish/stopped/error.
+async function runLiveNode(s, roleId, meta, prompt, run, { setNode, emit, flog }) {
+  const sid = s.nodes[roleId].claudeSessionId;
+  const threshold = store.getSettings().switchThreshold || 90;
+  const tried = new Set();
+  const msgs = [prompt];       // hàng message chờ gửi (prompt + queue)
+  let inFlight = null, handle = null, watch = null, settled = false;
+
+  const nextQ = () => (s.queue || []).find((q) => !q.applied && (!(q.roles || []).length || q.roles.includes(roleId)));
+  const enqueue = () => {
+    let q, added = false;
+    while ((q = nextQ())) { q.applied = true; added = true; msgs.push(q.text || "Làm tiếp phần bổ sung.");
+      flog({ role: "flow", roleName: "Queue", emoji: "➕", kind: "info", text: `(trực tiếp → ${roleId}) ${q.text || "chạy tiếp"}` }); }
+    if (added) { persist(s); broadcast({ type: "session:init", session: s.id, data: sessionPublic(s) }); }
+  };
+  const pump = () => {
+    if (inFlight || !handle) return;
+    enqueue();
+    if (msgs.length) { inFlight = msgs.shift(); handle.send(inFlight); }
+    else { s.live = null; if (watch) clearInterval(watch); handle.finish(); } // hết message -> đóng stdin
+  };
+
+  return await new Promise((resolveNode) => {
+    const done = () => { if (settled) return; settled = true; if (watch) clearInterval(watch); s.live = null; s.currentChild = null; resolveNode(); };
+    const pause = (msg) => {
+      setNode(roleId, { status: "pending", activity: "⏸ " + msg });
+      s.status = "stopped"; s.error = { kind: "quota", roleId, message: msg }; persist(s);
+      emit({ type: "node:stopped", id: roleId }); emit({ type: "flow:stopped" });
+      flog({ role: roleId, roleName: meta.name, emoji: "⏸", kind: "stopped", text: msg });
+      store.finishRun(run.lastInsertRowid, "stopped");
+      notify(`⏸ [${s.projectName}] "${s.feature}" tạm dừng: ${msg}`); done();
+    };
+
+    const spawnOn = (account, resume) => {
+      tried.add(account.id); s.activeAccount = account.id; s.nodes[roleId].claudeAccount = account.id;
+      setNode(roleId, { status: "running", account: account.id, activity: resume ? "🔴 khôi phục (đổi acct)…" : "🔴 trực tiếp…" });
+      persist(s); emit({ type: "node:start", id: roleId, account: account.id });
+      flog({ role: roleId, roleName: meta.name, emoji: "🔴", kind: "start", text: `▶ [trực tiếp] acct: ${account.id}${resume ? " (resume sau switch)" : ""}` });
+
+      let switchProactive = false;
+      handle = runClaudeStream({
+        cwd: s.repoPath, configDir: account.configDir, model: s.model,
+        allowCommands: store.getSettings().allowCommands !== false,
+        sessionId: resume ? undefined : sid, resumeSessionId: resume ? sid : undefined,
+        onSpawn: (c) => { s.currentChild = c; },
+        onEvent: (d) => { if (d.kind !== "result") { setNode(roleId, { activity: d.text });
+          emit({ type: "node:activity", id: roleId, ...d });
+          flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: d.kind, text: d.text }); } },
+        onTurnEnd: (d) => { s.nodes[roleId].claudeCreated = true; if (d?.cost) s.cost = (s.cost || 0) + d.cost; inFlight = null; pump(); },
+      });
+      s.live = { roleId, inject: pump };
+
+      if (watch) clearInterval(watch);
+      watch = setInterval(async () => {
+        try {
+          const u = await fetchUsage(account.configDir);
+          if (u?.fiveHourPct != null && u.fiveHourPct >= threshold) {
+            const nb = await bestOtherAccountBelow(account.id, threshold);
+            if (nb) { switchProactive = true; clearInterval(watch);
+              flog({ role: roleId, roleName: meta.name, emoji: "⚡", kind: "info", text: `${account.id} sắp cạn — đổi sang ${nb}, giữ hội thoại` });
+              killChild(handle.child); }
+          }
+        } catch {}
+      }, WATCH_MS);
+
+      handle.promise.then(() => { // đóng bình thường (sau finish) -> node xong
+        if (settled) return;
+        setNode(roleId, { status: "done", activity: "✓ hoàn tất", claudeAccount: account.id });
+        persist(s); emit({ type: "node:done", id: roleId });
+        flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "done", text: "✓ hoàn tất" });
+        done();
+      }).catch(async (e) => {
+        if (settled) return;
+        if (watch) clearInterval(watch);
+        if (s.cancelRequested) {
+          setNode(roleId, { status: "pending", activity: "⏸ đã dừng" }); s.status = "stopped"; persist(s);
+          emit({ type: "node:stopped", id: roleId }); emit({ type: "flow:stopped" });
+          flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "stopped", text: "⏸ đã tạm dừng" });
+          store.finishRun(run.lastInsertRowid, "stopped"); done(); return;
+        }
+        const kind = classifyError(e.message);
+        if (switchProactive || kind === "quota") { // rate-limit / sắp cạn -> switch account, giữ ngữ cảnh
+          const nextId = await bestUntriedAccount(tried);
+          const nb = nextId ? enabledAccounts().find((a) => a.id === nextId) : null;
+          if (nb) {
+            const ok = copySessionTranscript(account.configDir, nb.configDir, sid);
+            flog({ role: roleId, roleName: meta.name, emoji: "↻", kind: "info",
+              text: `Đổi sang ${nb.id} — ${ok ? "khôi phục hội thoại (resume, giữ ngữ cảnh)" : "không copy được transcript → chạy lại từ đầu"}` });
+            if (inFlight) { msgs.unshift(inFlight); inFlight = null; } // gửi lại message đang dở
+            if (!ok) { msgs.length = 0; msgs.push(prompt); }          // fallback không giữ được ngữ cảnh
+            spawnOn(nb, ok); return;
+          }
+          pause("Đã thử hết account mà vẫn rate-limit — Tiếp tục khi quota reset."); return;
+        }
+        setNode(roleId, { status: "error", activity: "✖ " + String(e.message) });
+        s.status = "error"; s.error = { kind, message: String(e.message), roleId }; persist(s);
+        emit({ type: "node:error", id: roleId, message: String(e.message), errorKind: kind });
+        flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "error", text: "✖ " + hintFor(kind) + String(e.message).slice(0, 200) });
+        store.finishRun(run.lastInsertRowid, "error");
+        notify(`✖ [${s.projectName}] "${s.feature}" LỖI ở ${meta.name} (${kind}).`); done();
+      });
+
+      pump(); // gửi message đầu tiên (prompt)
+    };
+
+    // Node đã tạo session trước đó (resume/chạy lại) -> dùng --resume trên account cũ (tránh "already in use").
+    const created = !!s.nodes[roleId].claudeCreated;
+    const startAcc = created ? enabledAccounts().find((a) => a.id === s.nodes[roleId].claudeAccount) : null;
+    (startAcc ? Promise.resolve(startAcc) : ensureAccountFor(s))
+      .then((acc) => spawnOn(acc, created && !!startAcc)).catch((e) => {
+        setNode(roleId, { status: "error", activity: "✖ " + String(e.message) });
+        s.status = "error"; s.error = { kind: "unknown", message: String(e.message), roleId }; persist(s);
+        emit({ type: "node:error", id: roleId, message: String(e.message) }); done();
+      });
+  });
 }
 
 async function runSession(s, resume = false) {
@@ -506,21 +818,79 @@ async function runSession(s, resume = false) {
     flog({ role: "flow", roleName: "Skill", emoji: "📁", kind: "error", text: "Lỗi workspace: " + String(e.message) });
   }
 
-  for (const roleId of ROLE_ORDER) {
-    if (s.cancelRequested) break;
+  // Quét động: mỗi vòng drain hàng đợi (có thể thêm/reset node) rồi chọn node "pending" kế theo thứ tự pipeline.
+  // Nếu có runScope (relaunch do 1 queue message có chọn node) -> CHỈ chạy đúng node được chọn, bỏ node pending cũ.
+  while (!s.cancelRequested) {
+    drainQueue(s, flog);
+    const roleId = ROLE_ORDER.find((r) => s.runSet.has(r) && s.nodes[r]?.status === "pending"
+      && (!s.runScope || s.runScope.has(r)));
+    if (!roleId) break; // hết node cần chạy
     const meta = ROLE_META[roleId];
 
-    if (!s.runSet.has(roleId)) continue;                    // ngoài mode
-    if (s.nodes[roleId]?.status === "done") continue;       // đã xong (resume: bỏ qua, chạy tiếp phần còn lại)
+    const continuation = !!(s.nodes[roleId].followup && s.nodes[roleId].claudeSessionId);
 
-    if (s.economy && isFull && roleHasOutputs(roleId, s.feature, ws.docsDir)) {
+    if (!continuation && s.economy && isFull && roleHasOutputs(roleId, s.feature, ws.docsDir)) {
       setNode(roleId, { status: "disabled", activity: "♻️ đã có" });
       emit({ type: "node:skipped", id: roleId });
       flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "skip", text: "♻️ đã có tài liệu — bỏ qua để tiết kiệm token" });
       continue;
     }
 
+    // NỐI HỘI THOẠI (giống VSCode): --resume đúng session cũ với message bổ sung, pin account đã lưu.
+    if (continuation) {
+      const followup = s.nodes[roleId].followup;
+      const account = enabledAccounts().find((a) => a.id === s.nodes[roleId].claudeAccount)
+        || enabledAccounts()[0];
+      if (!account) throw new Error("Không có account nào được BẬT.");
+      s.activeAccount = account.id;
+      setNode(roleId, { status: "running", account: account.id, activity: "⟳ tiếp tục hội thoại…" });
+      persist(s);
+      emit({ type: "node:start", id: roleId, account: account.id });
+      flog({ role: roleId, roleName: meta.name, emoji: "⟳", kind: "start", text: "▶ tiếp tục hội thoại (resume) với yêu cầu bổ sung" });
+      try {
+        await runClaude({
+          prompt: followup, cwd: s.repoPath, configDir: account.configDir, model: s.model,
+          maxBudgetUsd: s.maxBudgetUsd, allowCommands: store.getSettings().allowCommands !== false,
+          resumeSessionId: s.nodes[roleId].claudeSessionId,
+          onSpawn: (c) => { s.currentChild = c; },
+          onEvent: (d) => { setNode(roleId, { activity: d.text }); emit({ type: "node:activity", id: roleId, ...d });
+            flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: d.kind, text: d.text }); },
+        });
+        s.currentChild = null;
+        setNode(roleId, { status: "done", activity: "✓ đã bổ sung", followup: null });
+        persist(s); emit({ type: "node:done", id: roleId });
+        flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "done", text: "✓ hoàn tất phần bổ sung" });
+      } catch (e) {
+        s.currentChild = null;
+        if (s.cancelRequested) {
+          setNode(roleId, { status: "pending", activity: "⏸ đã dừng" }); s.status = "stopped"; persist(s);
+          emit({ type: "node:stopped", id: roleId }); emit({ type: "flow:stopped" });
+          flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "stopped", text: "⏸ đã tạm dừng" });
+          store.finishRun(run.lastInsertRowid, "stopped"); return;
+        }
+        const kind = classifyError(e.message);
+        setNode(roleId, { status: "error", activity: "✖ " + String(e.message), followup: null });
+        s.status = "error"; s.error = { kind, message: String(e.message), roleId }; persist(s);
+        emit({ type: "node:error", id: roleId, message: String(e.message), errorKind: kind });
+        flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "error", text: "✖ " + hintFor(kind) + String(e.message).slice(0, 200) });
+        store.finishRun(run.lastInsertRowid, "error");
+        notify(`✖ [${s.projectName}] "${s.feature}" LỖI (bổ sung) ở ${meta.name} (${kind}).`);
+        return;
+      }
+      continue; // xong node bổ sung
+    }
+
     const prompt = buildRolePrompt(roleId, s.feature, roleId === s.roles[0], { ...ws, note: s.note });
+    if (!s.nodes[roleId].claudeSessionId) s.nodes[roleId].claudeSessionId = randomUUID();
+
+    // CHẾ ĐỘ TRỰC TIẾP (giống VSCode): giữ 1 tiến trình sống, chèn message queue khi đang chạy,
+    // và TỰ SWITCH account khi rate-limit — copy transcript sang account mới rồi --resume để GIỮ ngữ cảnh.
+    if (s.liveMode) {
+      await runLiveNode(s, roleId, meta, prompt, run, { setNode, emit, flog });
+      if (s.status !== "running") return; // node đã stopped/error
+      continue;
+    }
+
     let nodeDone = false, attempt = 0, forced = null;
     const tried = new Set(); // account đã thử cho node này (để biết khi nào hết account)
     while (!nodeDone) {
@@ -532,6 +902,8 @@ async function runSession(s, resume = false) {
       forced = null;
       if (account) s.activeAccount = account.id; else account = await ensureAccountFor(s);
       tried.add(account.id);
+      s.nodes[roleId].claudeSessionId = randomUUID(); // session-id MỚI mỗi lần spawn -> tránh "already in use"
+      s.nodes[roleId].claudeAccount = account.id;
       setNode(roleId, { status: "running", account: account.id, activity: attempt > 1 ? "↻ đổi account, chạy lại…" : "…" });
       persist(s);
       emit({ type: "node:start", id: roleId, account: account.id });
@@ -549,16 +921,17 @@ async function runSession(s, resume = false) {
               switchTo = next; clearInterval(watch);
               flog({ role: roleId, roleName: meta.name, emoji: "⚡", kind: "info",
                 text: `${account.id} sắp cạn (${Math.round(u.fiveHourPct)}%) — tạm dừng node, đổi sang ${next} rồi chạy lại` });
-              try { s.currentChild?.kill("SIGTERM"); } catch {}
+              killChild(s.currentChild);
             }
           }
         } catch { /* bỏ qua lỗi đọc usage */ }
       }, WATCH_MS);
 
       try {
-        await runClaude({
+        const out = await runClaude({
           prompt, cwd: s.repoPath, configDir: account.configDir, model: s.model, maxBudgetUsd: s.maxBudgetUsd,
           allowCommands: store.getSettings().allowCommands !== false,
+          sessionId: s.nodes[roleId].claudeSessionId, // gắn để về sau --resume nối ngữ cảnh
           onSpawn: (c) => { s.currentChild = c; },
           onEvent: (d) => {
             setNode(roleId, { activity: d.text });
@@ -566,8 +939,10 @@ async function runSession(s, resume = false) {
             flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: d.kind, text: d.text });
           },
         });
+        if (out?.result?.cost) s.cost = (s.cost || 0) + out.result.cost; // cộng dồn chi phí
         clearInterval(watch); s.currentChild = null;
-        setNode(roleId, { status: "done", activity: "✓ hoàn tất" });
+        // nhớ account đã chạy để lần bổ sung sau --resume đúng nơi có lịch sử hội thoại
+        setNode(roleId, { status: "done", activity: "✓ hoàn tất", claudeAccount: account.id });
         persist(s);
         emit({ type: "node:done", id: roleId });
         flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: "done", text: "✓ hoàn tất" });
@@ -621,6 +996,7 @@ async function runSession(s, resume = false) {
     if (s.cancelRequested) break;
   }
 
+  s.runScope = null; // hết lượt scoped -> lần sau (resume) chạy mọi node pending
   if (s.cancelRequested) { // dừng giữa 2 node (break ở đầu vòng lặp)
     s.status = "stopped"; store.finishRun(run.lastInsertRowid, "stopped"); persist(s);
     flog({ role: "flow", roleName: "Flow", emoji: "⏸", kind: "stopped", text: "Đã tạm dừng" });
@@ -647,9 +1023,11 @@ async function runSession(s, resume = false) {
     } catch { /* bỏ qua */ }
   }
   persist(s);
-  flog({ role: "flow", roleName: "Flow", emoji: "🏁", kind: "done", text: "Hoàn tất" });
+  const mins = Math.max(1, Math.round((Date.now() - s.startedAt) / 60000));
+  const costStr = s.cost ? ` · 💰 $${s.cost.toFixed(2)}` : "";
+  flog({ role: "flow", roleName: "Flow", emoji: "🏁", kind: "done", text: `Hoàn tất · ⏱ ${mins}m${costStr}` });
   emit({ type: "flow:done" });
-  notify(`✅ [${s.projectName}] "${s.feature}" hoàn tất (mode ${s.roles.join("→")}).`);
+  notify(`✅ [${s.projectName}] "${s.feature}" hoàn tất · ⏱ ${mins}m${costStr}`);
 }
 
 // Gợi ý ngắn kèm lỗi để người dùng biết cách xử lý trước khi bấm Tiếp tục.

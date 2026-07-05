@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 
-// Modal đăng nhập account mới: nhập label -> lấy URL -> mở & authorize -> dán code -> tự thêm.
-export default function AccountLogin({ open, onClose, onDone }) {
+// Modal đăng nhập account: nhập label -> lấy URL -> mở & authorize -> dán code -> tự thêm.
+// relogin (tuỳ chọn): account đang hết hạn -> đăng nhập lại vào đúng configDir cũ.
+export default function AccountLogin({ open, onClose, onDone, relogin }) {
   const [step, setStep] = useState("label"); // label | code | busy
   const [label, setLabel] = useState("");
   const [loginId, setLoginId] = useState(null);
@@ -17,7 +18,8 @@ export default function AccountLogin({ open, onClose, onDone }) {
     setErr(""); setStep("busy");
     try {
       const r = await fetch("/api/accounts/login/start", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(relogin ? { accountId: relogin.id } : { label }),
       });
       const j = await r.json();
       if (!r.ok || !j.url) throw new Error(j.error || "Không lấy được URL");
@@ -38,17 +40,19 @@ export default function AccountLogin({ open, onClose, onDone }) {
     } catch (e) { setErr(String(e.message)); setStep("code"); }
   };
 
+
   return (
     <div className="modal-bg" onClick={close}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head"><span>👤 Thêm account Claude</span><button onClick={close}>✕</button></div>
+        <div className="modal-head"><span>{relogin ? `🔑 Đăng nhập lại: ${relogin.label}` : "👤 Thêm account Claude"}</span><button onClick={close}>✕</button></div>
 
-        {step !== "code" && (
+        {step !== "code" && !relogin && (
           <label className="fld">
             <span>Tên gợi nhớ cho account</span>
             <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="vd: acc-cty, gmail-2…" disabled={step === "busy"} />
           </label>
         )}
+        {step !== "code" && relogin && <div className="modal-req">Token của <b>{relogin.label}</b> đã hết hạn. Bấm để lấy link đăng nhập lại vào đúng account cũ.</div>}
 
         {step === "code" && (
           <>
@@ -70,7 +74,7 @@ export default function AccountLogin({ open, onClose, onDone }) {
           <span className="run-preview">{step === "busy" ? "Đang xử lý…" : ""}</span>
           {step === "code"
             ? <button className="primary" disabled={!code.trim() || step === "busy"} onClick={submitCode}>✓ Xác nhận & thêm</button>
-            : <button className="primary" disabled={!label.trim() || step === "busy"} onClick={start}>▶ Lấy link đăng nhập</button>}
+            : <button className="primary" disabled={(!relogin && !label.trim()) || step === "busy"} onClick={start}>▶ Lấy link đăng nhập</button>}
         </div>
       </div>
     </div>

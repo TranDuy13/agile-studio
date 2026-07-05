@@ -11,6 +11,7 @@ export default function RunModal({ open, onClose, onSubmit, models, defaults, pr
   const [economy, setEconomy] = useState(defaults.economy !== false);
   const [maxBudgetUsd, setMaxBudgetUsd] = useState(defaults.maxBudgetUsd || 0);
   const [saveLog, setSaveLog] = useState(false);
+  const [liveMode, setLiveMode] = useState(true);
   const [requirementId, setRequirementId] = useState(null);
 
   // Mỗi lần mở modal: nạp prefill (nếu có) + reset theo cấu hình mặc định.
@@ -22,7 +23,7 @@ export default function RunModal({ open, onClose, onSubmit, models, defaults, pr
     setRoles(p.roles);
     setRequirementId(prefill?.requirementId || null);
     setModel(defaults.model || ""); setEconomy(defaults.economy !== false); setMaxBudgetUsd(defaults.maxBudgetUsd || 0);
-    setSaveLog(false);
+    setSaveLog(false); setLiveMode(true);
   }, [open]); // eslint-disable-line
 
   if (!open) return null;
@@ -34,7 +35,7 @@ export default function RunModal({ open, onClose, onSubmit, models, defaults, pr
   const submit = () => {
     if (!title.trim() || !enabled.length) return;
     // feature = tên (title); note = mô tả chi tiết đưa vào prompt cho các agent.
-    onSubmit({ feature: title.trim(), note: description.trim(), roles: enabled, model, economy, maxBudgetUsd, saveLog, requirementId });
+    onSubmit({ feature: title.trim(), note: description.trim(), roles: enabled, model, economy, maxBudgetUsd, saveLog, liveMode, requirementId });
   };
 
   return (
@@ -114,6 +115,12 @@ export default function RunModal({ open, onClose, onSubmit, models, defaults, pr
           <input type="checkbox" checked={saveLog} onChange={(e) => setSaveLog(e.target.checked)} />
           <span>💾 Lưu log session (xem lại được sau khi tải lại / restart)</span>
         </label>
+
+        <label className="eco-line">
+          <input type="checkbox" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
+          <span>🔴 Chế độ trực tiếp — chèn message vào node đang chạy (như Claude Code VSCode)</span>
+        </label>
+        {liveMode && <div className="modal-req">Trực tiếp: mỗi node giữ 1 tiến trình sống, message queue đẩy thẳng vào lúc đang chạy. Khi rate-limit sẽ tự đổi account & khôi phục hội thoại (copy transcript + resume) — giống switch account của Claude Code VSCode.</div>}
 
         <div className="modal-foot">
           <span className="run-preview">Chạy: {enabled.join(" → ") || "(chưa chọn)"}</span>

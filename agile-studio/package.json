@@ -6,11 +6,14 @@
   "scripts": {
     "server": "node server/index.js",
     "web": "vite --config web/vite.config.js",
-    "dev": "concurrently -k -n SERVER,WEB -c cyan,magenta \"npm:server\" \"npm:web\"",
-    "build": "vite build --config web/vite.config.js"
+    "dev": "concurrently -k -n SERVER,WEB,BOT -c cyan,magenta,yellow \"npm:server\" \"npm:web\" \"npm:bot\"",
+    "dev:web": "concurrently -k -n SERVER,WEB -c cyan,magenta \"npm:server\" \"npm:web\"",
+    "build": "vite build --config web/vite.config.js",
+    "bot": "node server/bot.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "discord.js": "^14.16.3",
     "express": "^4.21.2",
     "ws": "^8.18.0"
   },

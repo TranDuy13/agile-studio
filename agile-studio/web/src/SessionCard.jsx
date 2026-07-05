@@ -23,7 +23,7 @@ export default function SessionCard({ session, selected, onSelect, onStop, onRes
         <span className={"scard-badge st-" + session.status}>{STATUS_LABEL[session.status] || session.status}</span>
         {session.status === "running" &&
           <button className="scard-stop" onClick={(e) => { e.stopPropagation(); onStop(session.id); }}>⏸ Dừng</button>}
-        {session.resumable &&
+        {(session.status === "stopped" || session.status === "error") &&
           <button className="scard-resume" onClick={(e) => { e.stopPropagation(); onResume(session.id); }}>▶ Tiếp tục</button>}
         {session.status !== "running" &&
           <button className="scard-del" title="Xoá session" onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}>🗑</button>}

@@ -15,15 +15,19 @@ const DIR = join(homedir(), ".agile-studio");
 const CFG = join(DIR, "accounts.json");
 const ACCT_DIR = join(DIR, "accounts"); // config dir cho các account thêm qua UI
 
+// Config dir mặc định của Claude Code, TỰ BẮT theo HĐH:
+//  - Tôn trọng biến CLAUDE_CONFIG_DIR nếu người dùng đặt (authoritative).
+//  - Mặc định ~/.claude (đúng trên macOS/Linux/Windows vì Claude Code dùng homedir()/.claude).
+export function defaultConfigDir() {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+}
+
 export function loadAccounts() {
-  if (!existsSync(CFG)) {
-    // mặc định: 1 account ở ~/.claude (đăng nhập sẵn của máy)
-    return [{ id: "default", label: "Default", configDir: join(homedir(), ".claude") }];
-  }
+  if (!existsSync(CFG)) return loadDefault();
   try { const a = JSON.parse(readFileSync(CFG, "utf8")); return Array.isArray(a) && a.length ? a : loadDefault(); }
   catch { return loadDefault(); }
 }
-function loadDefault() { return [{ id: "default", label: "Default", configDir: join(homedir(), ".claude") }]; }
+function loadDefault() { return [{ id: "default", label: "Default", configDir: defaultConfigDir() }]; }
 
 export function saveAccounts(list) {
   mkdirSync(DIR, { recursive: true });
@@ -55,33 +59,41 @@ export function setAccountEnabled(id, enabled) {
 export function enabledAccounts() { return loadAccounts().filter((a) => !a.disabled); }
 function dedupe(list) { const seen = new Set(); return list.filter((a) => !seen.has(a.id) && seen.add(a.id)); }
 
-// Đọc credential OAuth từ macOS Keychain hoặc file (Linux/Windows) để lấy access token,
-// rồi gọi API usage của Anthropic đọc % dùng trong cửa sổ 5 giờ.
+function tokenFromCredJson(text) {
+  try {
+    const d = JSON.parse(text);
+    const o = d.claudeAiOauth || d.oauth || d || {};
+    if (o.accessToken && Date.now() < (o.expiresAt || 0)) return o.accessToken;
+  } catch {}
+  return null;
+}
+
+// Đọc credential OAuth để lấy access token — TỰ BẮT theo HĐH nơi Claude Code lưu:
+//  - Windows/Linux: file .credentials.json (trong configDir, hoặc vài vị trí thường gặp).
+//  - macOS: Keychain (tên thuần cho dir mặc định, tên có hash cho dir account riêng).
 async function readToken(configDir) {
-  // Linux/Windows: file .credentials.json trong configDir
-  const credFile = join(configDir, ".credentials.json");
-  if (existsSync(credFile)) {
-    try {
-      const d = JSON.parse(readFileSync(credFile, "utf8"));
-      const o = d.claudeAiOauth || {};
-      if (o.accessToken && Date.now() < (o.expiresAt || 0)) return o.accessToken;
-    } catch {}
-    return null;
+  const home = homedir();
+  const isDefault = configDir === defaultConfigDir();
+  // 1) File .credentials.json TRONG configDir. Vị trí dự phòng chung CHỈ áp dụng cho dir mặc định
+  //    (không dùng cho account riêng — tránh 1 account hết hạn lại mượn nhầm credential account khác).
+  const fileCandidates = [join(configDir, ".credentials.json"), join(configDir, "credentials.json")];
+  if (isDefault) fileCandidates.push(
+    join(home, ".config", "claude", ".credentials.json"),
+    process.env.APPDATA ? join(process.env.APPDATA, "Claude", ".credentials.json") : null,
+    process.env.XDG_CONFIG_HOME ? join(process.env.XDG_CONFIG_HOME, "claude", ".credentials.json") : null,
+  );
+  for (const f of fileCandidates.filter(Boolean)) {
+    if (existsSync(f)) { const t = tokenFromCredJson(readFileSync(f, "utf8")); if (t) return t; }
   }
-  // macOS: Keychain. Dir mặc định ~/.claude dùng tên THUẦN "Claude Code-credentials"
-  // (login bình thường lưu ở đó); dir account riêng dùng tên CÓ HASH theo configDir.
+
+  // 2) macOS Keychain. Dir mặc định = tên thuần; account riêng = CHỈ tên có hash của nó
+  //    (KHÔNG fallback về tên thuần — nếu token account riêng hết hạn thì báo chưa đăng nhập, không mượn account chính).
   if (process.platform === "darwin") {
     const hash = createHash("sha256").update(configDir).digest("hex").slice(0, 8);
-    const candidates = configDir === join(homedir(), ".claude")
-      ? ["Claude Code-credentials", `Claude Code-credentials-${hash}`]
-      : [`Claude Code-credentials-${hash}`, "Claude Code-credentials"];
+    const candidates = isDefault ? ["Claude Code-credentials", `Claude Code-credentials-${hash}`] : [`Claude Code-credentials-${hash}`];
     for (const svc of candidates) {
-      try {
-        const { stdout } = await pexec("security", ["find-generic-password", "-s", svc, "-w"]);
-        const d = JSON.parse(stdout);
-        const o = d.claudeAiOauth || {};
-        if (o.accessToken && Date.now() < (o.expiresAt || 0)) return o.accessToken;
-      } catch {}
+      try { const { stdout } = await pexec("security", ["find-generic-password", "-s", svc, "-w"]);
+        const t = tokenFromCredJson(stdout); if (t) return t; } catch {}
     }
   }
   return null;

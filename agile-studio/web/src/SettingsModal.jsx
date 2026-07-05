@@ -6,6 +6,7 @@ export default function SettingsModal({ open, onClose, models, defaults, onSaved
   const [economy, setEconomy] = useState(true);
   const [maxBudgetUsd, setMaxBudgetUsd] = useState(0);
   const [slackWebhook, setSlackWebhook] = useState("");
+  const [discordWebhook, setDiscordWebhook] = useState("");
   const [switchThreshold, setSwitchThreshold] = useState(90);
   const [allowCommands, setAllowCommands] = useState(true);
   const [desktop, setDesktop] = useState(localStorage.getItem("notifyDesktop") === "1");
@@ -14,6 +15,7 @@ export default function SettingsModal({ open, onClose, models, defaults, onSaved
     if (!open) return;
     setModel(defaults.model || ""); setEconomy(defaults.economy !== false);
     setMaxBudgetUsd(defaults.maxBudgetUsd || 0); setSlackWebhook(defaults.slackWebhook || "");
+    setDiscordWebhook(defaults.discordWebhook || "");
     setSwitchThreshold(defaults.switchThreshold || 90); setAllowCommands(defaults.allowCommands !== false);
     setDesktop(localStorage.getItem("notifyDesktop") === "1");
   }, [open]); // eslint-disable-line
@@ -30,9 +32,9 @@ export default function SettingsModal({ open, onClose, models, defaults, onSaved
   const save = async () => {
     await fetch("/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, economy, maxBudgetUsd, slackWebhook, switchThreshold, allowCommands }),
+      body: JSON.stringify({ model, economy, maxBudgetUsd, slackWebhook, discordWebhook, switchThreshold, allowCommands }),
     });
-    onSaved({ model, economy, maxBudgetUsd, slackWebhook, switchThreshold, allowCommands }); onClose();
+    onSaved({ model, economy, maxBudgetUsd, slackWebhook, discordWebhook, switchThreshold, allowCommands }); onClose();
   };
 
   return (
@@ -71,6 +73,12 @@ export default function SettingsModal({ open, onClose, models, defaults, onSaved
           <span>🔔 Slack webhook (báo khi done/lỗi/hết quota)</span>
           <input value={slackWebhook} onChange={(e) => setSlackWebhook(e.target.value)}
             placeholder="https://hooks.slack.com/services/…" />
+        </label>
+
+        <label className="fld">
+          <span>💬 Discord webhook (thông báo — không cần chạy bot)</span>
+          <input value={discordWebhook} onChange={(e) => setDiscordWebhook(e.target.value)}
+            placeholder="https://discord.com/api/webhooks/…" />
         </label>
 
         <label className="eco-line">

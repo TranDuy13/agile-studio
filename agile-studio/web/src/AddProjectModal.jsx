@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 
-const baseName = (p) => (p || "").split("/").filter(Boolean).pop() || "";
+const baseName = (p) => (p || "").split(/[\\/]/).filter(Boolean).pop() || "";
 
 // Modal tạo project: chọn folder repo (native macOS) + tên.
 export default function AddProjectModal({ open, onClose, onCreated }) {
@@ -47,7 +47,8 @@ export default function AddProjectModal({ open, onClose, onCreated }) {
           <span>Folder repo của project</span>
           <div className="folder-pick">
             <button className="folder-btn" onClick={pick}>📁 Chọn folder…</button>
-            <span className={"folder-path" + (path ? "" : " empty")}>{path || "chưa chọn"}</span>
+            <input className="folder-input" value={path} onChange={(e) => setPath(e.target.value)}
+              placeholder="hoặc dán/nhập đường dẫn tuyệt đối" />
           </div>
         </label>
 

@@ -1,9 +1,42 @@
 // Chạy Claude Code dưới nền cho một node role, parse stream-json để lấy "đang làm gì".
 import { spawn } from "node:child_process";
-import { homedir } from "node:os";
+import { existsSync, readdirSync, copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { defaultConfigDir } from "./accounts.js";
 
-const DEFAULT_CONFIG_DIR = join(homedir(), ".claude");
+// Bỏ mã màu ANSI (\x1b[..m) khỏi output để log hiển thị sạch, không tràn/đè.
+const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, "");
+
+// Kill claude + TOÀN BỘ tiến trình con (build/tsc/...) bằng cách kill cả process group,
+// và SIGKILL ép chết nếu SIGTERM không ăn (tránh treo ở "Đang dừng…").
+export function killChild(child) {
+  if (!child || child.killed) return;
+  const grp = () => { try { process.kill(-child.pid, "SIGTERM"); return true; } catch { return false; } };
+  if (!grp()) { try { child.kill("SIGTERM"); } catch {} }
+  setTimeout(() => {
+    try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+  }, 3000);
+}
+
+// Copy transcript hội thoại của 1 session từ config dir account này sang account khác,
+// để --resume trên account mới vẫn giữ NGUYÊN ngữ cảnh (switch account như VSCode nhưng khác config dir).
+// Transcript ở <configDir>/projects/<cwd-mã-hoá>/<sessionId>.jsonl — tìm theo sessionId ở mọi project folder.
+export function copySessionTranscript(fromDir, toDir, sessionId) {
+  try {
+    const fromProjects = join(fromDir, "projects");
+    if (!existsSync(fromProjects)) return false;
+    for (const folder of readdirSync(fromProjects)) {
+      const src = join(fromProjects, folder, `${sessionId}.jsonl`);
+      if (existsSync(src)) {
+        const destDir = join(toDir, "projects", folder);
+        mkdirSync(destDir, { recursive: true });
+        copyFileSync(src, join(destDir, `${sessionId}.jsonl`));
+        return true;
+      }
+    }
+  } catch { /* best-effort */ }
+  return false;
+}
 
 // Map subagent -> role node id
 export const ROLE_ORDER = ["pm", "ba", "da", "dev", "qc", "po"];
@@ -42,20 +75,23 @@ function describe(ev) {
 
 // Chạy 1 prompt qua Claude Code trong cwd (repo project), với configDir account đã chọn.
 // onEvent nhận {kind, text, ...} realtime. onSpawn nhận child để orchestrator kill khi tạm dừng.
-export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCommands = true, onEvent, onSpawn }) {
+export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCommands = true, sessionId, resumeSessionId, onEvent, onSpawn }) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     // Chỉ set CLAUDE_CONFIG_DIR khi account KHÁC dir mặc định. Nếu set cho dir mặc định,
     // claude tìm credential Keychain theo tên có hash (Claude Code-credentials-<hash>) — không tồn tại
     // vì `/login` bình thường lưu ở tên thuần "Claude Code-credentials" → báo "Not logged in".
-    if (configDir && configDir !== DEFAULT_CONFIG_DIR) env.CLAUDE_CONFIG_DIR = configDir;
+    if (configDir && configDir !== defaultConfigDir()) env.CLAUDE_CONFIG_DIR = configDir;
     // -p: print mode (headless). --output-format stream-json để parse realtime.
     // allowCommands: cho agent chạy lệnh (build/test/git) — headless không ai bấm duyệt nên phải bypass.
     const args = ["-p", prompt, "--output-format", "stream-json", "--verbose",
                   ...(allowCommands ? ["--dangerously-skip-permissions"] : ["--permission-mode", "acceptEdits"])];
+    // Nối hội thoại (giống Claude Code VSCode): resume session cũ, hoặc gắn session-id để nối về sau.
+    if (resumeSessionId) args.push("--resume", resumeSessionId);
+    else if (sessionId) args.push("--session-id", sessionId);
     if (model) args.push("--model", model); // model do người dùng cấu hình (alias hoặc full id)
     if (maxBudgetUsd > 0) args.push("--max-budget-usd", String(maxBudgetUsd)); // trần chi phí/role (tiết kiệm)
-    const child = spawn("claude", args, { cwd, env });
+    const child = spawn("claude", args, { cwd, env, detached: true }); // group riêng để kill cả cây con
     onSpawn?.(child);
 
     let buf = "";
@@ -85,7 +121,49 @@ export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCo
     child.on("error", (e) => reject(e));
     child.on("close", (code) => {
       if (code === 0) resolve({ result: lastResult });
-      else reject(new Error(`claude exited ${code}: ${stderr.slice(0, 500)}`));
+      else reject(new Error(`claude exited ${code}: ${stripAnsi(stderr).slice(0, 400)}`));
     });
   });
+}
+
+// Phiên bản "trực tiếp" (giống Claude Code VSCode): giữ 1 tiến trình sống, gửi nhiều user message
+// qua stdin (stream-json), giữ nguyên ngữ cảnh. Mỗi lượt kết thúc bằng event result -> onTurnEnd.
+// Trả về { promise, send(text), finish(), child }. Gọi finish() để đóng stdin -> tiến trình thoát.
+export function runClaudeStream({ cwd, configDir, model, allowCommands = true, sessionId, resumeSessionId, onEvent, onTurnEnd, onSpawn }) {
+  const env = { ...process.env };
+  if (configDir && configDir !== defaultConfigDir()) env.CLAUDE_CONFIG_DIR = configDir;
+  const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                ...(allowCommands ? ["--dangerously-skip-permissions"] : ["--permission-mode", "acceptEdits"])];
+  if (resumeSessionId) args.push("--resume", resumeSessionId);
+  else if (sessionId) args.push("--session-id", sessionId);
+  if (model) args.push("--model", model);
+  const child = spawn("claude", args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  onSpawn?.(child);
+
+  let buf = "", stderr = "", lastResult = null;
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString();
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let ev; try { ev = JSON.parse(line); } catch { continue; }
+      const d = describe(ev);
+      if (!d) continue;
+      if (d.kind === "result") { lastResult = d; onEvent?.(d); onTurnEnd?.(d); }
+      else onEvent?.(d);
+    }
+  });
+  child.stderr.on("data", (c) => (stderr += c.toString()));
+
+  const promise = new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => code === 0 ? resolve({ result: lastResult })
+      : reject(new Error(`claude exited ${code}: ${stripAnsi(stderr).slice(0, 400)}`)));
+  });
+  const send = (text) => {
+    try { child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n"); } catch {}
+  };
+  const finish = () => { try { child.stdin.end(); } catch {} };
+  return { promise, send, finish, child };
 }

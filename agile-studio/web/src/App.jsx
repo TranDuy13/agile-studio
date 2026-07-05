@@ -7,7 +7,8 @@ import SessionCard from "./SessionCard.jsx";
 import DocsPanel from "./DocsPanel.jsx";
 import SettingsModal from "./SettingsModal.jsx";
 import AddProjectModal from "./AddProjectModal.jsx";
-import { ROLE_ORDER, presetOf } from "./presets.js";
+import ScheduleTab from "./ScheduleTab.jsx";
+import { ROLE_ORDER, ROLE_META, presetOf } from "./presets.js";
 
 // Thông báo desktop (nếu user bật + đã cấp quyền).
 function desktopNotify(title, body) {
@@ -31,6 +32,7 @@ export default function App() {
   const [addProjOpen, setAddProjOpen] = useState(false);
   const [modalPrefill, setModalPrefill] = useState(null);
   const [reqVersion, setReqVersion] = useState(0); // bump khi requirement đổi -> Requirements reload
+  const [schedVersion, setSchedVersion] = useState(0); // bump khi lịch đổi
   const [models, setModels] = useState([]);
   const [defaults, setDefaults] = useState({ model: "", economy: true, maxBudgetUsd: 0 });
   const [accountEvent, setAccountEvent] = useState(null);
@@ -106,6 +108,8 @@ export default function App() {
           setReqVersion((v) => v + 1); break;
         case "accounts:changed":
           setAccountEvent({ kind: "changed" }); setTimeout(() => setAccountEvent(null), 200); break;
+        case "schedules:changed": case "schedule:fired":
+          setSchedVersion((v) => v + 1); break;
       }
     };
     return () => ws.close();
@@ -134,8 +138,15 @@ export default function App() {
   const toggleSaveLog = (id, saveLog) => fetch(`/api/sessions/${id}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ saveLog }),
   });
+  const toggleStreamLog = (id, streamLog) => fetch(`/api/sessions/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ streamLog }),
+  });
   const loadSessionLogs = (id) => fetch(`/api/sessions/${id}/logs`).then((r) => r.json())
     .then((list) => upSession(id, (s) => ({ ...s, logs: list || [] })));
+  const queueMessage = (id, payload) => fetch(`/api/sessions/${id}/queue`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }).then((r) => r.json());
+  const cancelQueue = (id, qid) => fetch(`/api/sessions/${id}/queue/${qid}`, { method: "DELETE" });
   const deleteSession = (id) => {
     if (!confirm("Xoá session này?")) return;
     if (id === selectedId) setSelectedId(null);
@@ -172,6 +183,7 @@ export default function App() {
                 <button className={tab === "flow" ? "on" : ""} onClick={() => setTab("flow")}>Sessions</button>
                 <button className={tab === "req" ? "on" : ""} onClick={() => setTab("req")}>Requirement</button>
                 <button className={tab === "docs" ? "on" : ""} onClick={() => setTab("docs")}>Tài liệu</button>
+                <button className={tab === "sched" ? "on" : ""} onClick={() => setTab("sched")}>⏰ Lịch</button>
               </div>
               {tab === "flow" && (
                 <>
@@ -195,11 +207,14 @@ export default function App() {
                 </div>
 
                 {selected && <SessionDetail session={selected} onStop={stopSession} onResume={resumeSession}
-                  onToggleSaveLog={toggleSaveLog} onLoadLogs={loadSessionLogs} />}
+                  onToggleSaveLog={toggleSaveLog} onToggleStreamLog={toggleStreamLog} onLoadLogs={loadSessionLogs}
+                  onQueue={queueMessage} onCancelQueue={cancelQueue} />}
               </div>
             ) : tab === "req" ? (
               <Requirements projectId={active.id} version={reqVersion}
                 onAnalyze={(prefill) => openRun(prefill)} />
+            ) : tab === "sched" ? (
+              <ScheduleTab projects={projects} defaultProjectId={active.id} models={models} version={schedVersion} />
             ) : (
               <DocsPanel projectId={active.id} />
             )}
@@ -223,10 +238,54 @@ const ERR_HINT = {
   unknown: "Đã xảy ra lỗi. Xem log rồi bấm Tiếp tục để chạy lại từ node lỗi.",
 };
 
+// Ô nhập "hàng đợi" — gửi yêu cầu bổ sung cho session (đang chạy / xong / tạm dừng).
+function QueueComposer({ session, onQueue, onCancelQueue }) {
+  const [text, setText] = useState("");
+  const [roles, setRoles] = useState([]);
+  const toggle = (r) => setRoles((s) => (s.includes(r) ? s.filter((x) => x !== r) : [...s, r]));
+  const send = () => {
+    if (!text.trim() && !roles.length) return;
+    onQueue(session.id, { text: text.trim(), roles });
+    setText(""); setRoles([]);
+  };
+  const pending = (session.queue || []).filter((q) => !q.applied);
+  return (
+    <div className="queue">
+      <div className="queue-title">➕ Yêu cầu bổ sung (queue) — nối tiếp hội thoại như Claude Code</div>
+      <textarea className="queue-text" rows={2} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder="vd: làm thêm phần export PDF; hoặc bổ sung validate…" />
+      <div className="queue-row">
+        <div className="queue-chips">
+          {ROLE_ORDER.map((r) => (
+            <button key={r} className={"qchip" + (roles.includes(r) ? " on" : "")} onClick={() => toggle(r)}
+              title={ROLE_META[r].name}>{ROLE_META[r].emoji} {ROLE_META[r].name}</button>
+          ))}
+        </div>
+        <button className="queue-send" disabled={!text.trim() && !roles.length} onClick={send}>Gửi</button>
+      </div>
+      <div className="queue-hint">
+        Chọn node để (re)chạy cho yêu cầu này (vd thêm 🔍QC). Không chọn → nối tiếp agent gần nhất (giữ ngữ cảnh).
+      </div>
+      {pending.length > 0 && (
+        <div className="queue-list">
+          <div className="queue-list-title">⏳ Chờ xử lý ({pending.length}) — có thể huỷ khi claude chưa chạy</div>
+          {pending.map((q) => (
+            <div className="qitem" key={q.id}>
+              <span className="qitem-text">{q.roles?.length ? `[${q.roles.join(",")}] ` : ""}{q.text || "(chạy lại)"}</span>
+              <button className="qitem-x" title="Huỷ message này" onClick={() => onCancelQueue(session.id, q.id)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Chi tiết 1 session: canvas quy trình + log riêng của session đó.
-function SessionDetail({ session, onStop, onResume, onToggleSaveLog, onLoadLogs }) {
+function SessionDetail({ session, onStop, onResume, onToggleSaveLog, onToggleStreamLog, onLoadLogs, onQueue, onCancelQueue }) {
   const preset = presetOf(session.roles);
   const err = session.error;
+  const resumable = session.status === "stopped" || session.status === "error"; // suy từ status (không dựa field cũ)
   // Nạp log đã lưu khi mở session mà log in-memory rỗng (vd sau khi tải lại trang).
   useEffect(() => {
     if (session.saveLog && (!session.logs || !session.logs.length)) onLoadLogs(session.id);
@@ -238,6 +297,8 @@ function SessionDetail({ session, onStop, onResume, onToggleSaveLog, onLoadLogs 
           <b>{session.feature || "(không mô tả)"}</b>
           <span className="tag mode">{preset ? preset.icon + " " + preset.label : "Tuỳ chỉnh"}</span>
           <span className="tag">🧠 {session.model || "mặc định"}</span>
+          {session.liveMode && <span className="tag" style={{ color: "var(--error)", borderColor: "var(--error)" }}>🔴 trực tiếp</span>}
+          {session.cost > 0 && <span className="tag">💰 ${session.cost.toFixed(2)}</span>}
           <span className={"tag st-" + session.status}>{session.status}</span>
         </div>
         <div className="sdetail-actions">
@@ -246,11 +307,16 @@ function SessionDetail({ session, onStop, onResume, onToggleSaveLog, onLoadLogs 
             title={session.saveLog ? "Đang lưu log — bấm để tắt" : "Bật lưu log session (xem lại sau)"}>
             💾 {session.saveLog ? "Đang lưu log" : "Lưu log"}
           </button>
+          <button className={"savelog-toggle" + (session.streamLog ? " on" : "")}
+            onClick={() => onToggleStreamLog(session.id, !session.streamLog)}
+            title="Gửi log realtime vào thread Discord riêng của session này">
+            📡 {session.streamLog ? "Đang stream" : "Stream Discord"}
+          </button>
           {session.status === "running" &&
             <button className="stop" disabled={session.stopping} onClick={() => onStop(session.id)}>
               {session.stopping ? "Đang dừng…" : "⏸ Tạm dừng"}
             </button>}
-          {session.resumable &&
+          {resumable &&
             <button className="resume" onClick={() => onResume(session.id)}>▶ Tiếp tục</button>}
         </div>
       </div>
@@ -262,6 +328,7 @@ function SessionDetail({ session, onStop, onResume, onToggleSaveLog, onLoadLogs 
         </div>
       )}
       <Canvas nodes={session.nodes} order={ROLE_ORDER} />
+      <QueueComposer session={session} onQueue={onQueue} onCancelQueue={onCancelQueue} />
       <SessionLog logs={session.logs} />
     </div>
   );
