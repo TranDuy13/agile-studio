@@ -1,14 +1,46 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import AccountLogin from "./AccountLogin.jsx";
 import UsageModal from "./UsageModal.jsx";
 
-// Hiện account đang dùng + % quota; poll định kỳ; báo khi auto-switch; thêm/xoá account.
+// Tên hiển thị (issue 13): có nickname thật -> nickname; nếu không -> email; cuối cùng -> id.
+// "Default" là label hệ thống (không phải người dùng đặt) nên coi như chưa đặt -> hiện email.
+export const acctName = (a) =>
+  (a.label && a.label.trim() && a.label !== "Default") ? a.label : (a.email || a.id);
+
+// Chú thích icon cho popover ℹ (issue 15).
+const LEGEND_ROWS = [
+  ["▶", "đang dùng"],
+  ["★ / ☆", "đặt / bỏ mặc định"],
+  ["⏻ / ▶", "tắt / bật lại"],
+  ["↻", "làm mới usage"],
+  ["🔑", "đăng nhập lại"],
+  ["✕", "xoá khỏi danh sách"],
+];
+
+// Icon info + popover chú thích (thay cho native title cho đẹp).
+function IconLegend() {
+  return (
+    <div className="acct-legend" tabIndex={0} aria-label="Chú thích icon">
+      <span className="info-i">i</span>
+      <div className="acct-legend-pop" role="tooltip">
+        <div className="legend-title">Chú thích icon</div>
+        {LEGEND_ROWS.map(([k, v]) => (
+          <div className="legend-row" key={k}><span>{k}</span>{v}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Hiện account + % quota; làm mới khi quay lại tab (issue 09); thêm/xoá account.
 export default function AccountBadge({ event }) {
   const [data, setData] = useState({ active: null, accounts: [] });
   const [adding, setAdding] = useState(false);
   const [relogin, setRelogin] = useState(null); // account cần đăng nhập lại
   const [viewing, setViewing] = useState(null); // account đang xem usage chi tiết
   const [busy, setBusy] = useState(null); // id đang refresh, hoặc "all"
+  const lastRefresh = useRef(0);           // debounce cho auto-refresh khi focus (issue 09)
+
   // Chỉ nạp DANH SÁCH account (không gọi API usage). Giữ lại % usage đã fetch trước đó.
   const load = useCallback(() => {
     fetch("/api/accounts").then((r) => r.json()).then((d) =>
@@ -16,8 +48,39 @@ export default function AccountBadge({ event }) {
         ...a, usage: a.usage ?? prev.accounts.find((p) => p.id === a.id)?.usage ?? null,
       })) }))).catch(() => {});
   }, []);
-  useEffect(() => { load(); }, [load]); // nạp 1 lần, KHÔNG tự poll định kỳ
   useEffect(() => { if (event) load(); }, [event, load]);
+
+  // Bấm refresh tất cả -> lúc này MỚI gọi API usage cho mọi account.
+  const refreshAll = useCallback(async () => {
+    setBusy("all"); lastRefresh.current = Date.now();
+    try { const d = await fetch("/api/accounts?usage=1").then((r) => r.json()); setData(d); }
+    finally { setBusy(null); }
+  }, []);
+  const refreshOne = async (id) => {
+    setBusy(id); lastRefresh.current = Date.now();
+    try {
+      const r = await fetch(`/api/accounts/${id}/usage`).then((x) => x.json());
+      setData((d) => ({ ...d, accounts: d.accounts.map((a) => (a.id === id ? { ...a, usage: r.usage } : a)) }));
+    } finally { setBusy(null); }
+  };
+
+  // F5/mount: kiểm tra usage NGAY khi tải trang (reload phải tự check limit).
+  useEffect(() => { refreshAll(); }, [refreshAll]);
+
+  // Issue 09: làm mới usage khi quay lại tab (focus/visible), có debounce ~30s. KHÔNG poll nền.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastRefresh.current < 30000) return;
+      refreshAll();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [refreshAll]);
 
   const remove = async (id) => {
     if (!confirm("Xoá account này khỏi danh sách? (không xoá đăng nhập gốc)")) return;
@@ -34,25 +97,13 @@ export default function AccountBadge({ event }) {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preferredAccount: next }),
     }); load();
   };
-  // Bấm refresh tất cả -> lúc này MỚI gọi API usage cho mọi account.
-  const refreshAll = async () => {
-    setBusy("all");
-    try { const d = await fetch("/api/accounts?usage=1").then((r) => r.json()); setData(d); }
-    finally { setBusy(null); }
-  };
-  const refreshOne = async (id) => {
-    setBusy(id);
-    try {
-      const r = await fetch(`/api/accounts/${id}/usage`).then((x) => x.json());
-      setData((d) => ({ ...d, accounts: d.accounts.map((a) => (a.id === id ? { ...a, usage: r.usage } : a)) }));
-    } finally { setBusy(null); }
-  };
 
   return (
     <div className="accounts">
       <div className="acct-title">
         <span>Tài khoản Claude</span>
         <div className="acct-title-btns">
+          <IconLegend />
           <button className={"acct-icon" + (busy === "all" ? " spin" : "")} onClick={refreshAll}
             disabled={busy != null} title="Làm mới % usage tất cả">↻</button>
           <button className="acct-icon" onClick={() => setAdding(true)} title="Thêm account (đăng nhập)">+</button>
@@ -66,10 +117,10 @@ export default function AccountBadge({ event }) {
             <div className="acct-row">
               <span className="acct-dot" data-on={on} />
               <button className="acct-label" onClick={() => setViewing(a)}
-                title={"Xem usage chi tiết" + (a.email ? ` (${a.label})` : "")}>{a.email || a.label}</button>
+                title={"Xem usage chi tiết" + (a.email ? ` (${a.email})` : "")}>{acctName(a)}</button>
               {a.disabled ? <span className="acct-off-tag">đã tắt</span>
                 : a.loggedIn === false ? <span className="acct-expired">hết hạn</span>
-                : on && <span className="acct-active">đang dùng</span>}
+                : on && <span className="acct-active" title="đang dùng" aria-label="đang dùng">▶</span>}
               <div className="acct-acts">
                 {!a.disabled && a.loggedIn === false && (
                   <button className="acct-btn relogin" title="Token hết hạn — đăng nhập lại" onClick={() => setRelogin(a)}>🔑</button>

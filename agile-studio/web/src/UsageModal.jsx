@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { acctName } from "./AccountBadge.jsx";
 
 const barColor = (p) => (p >= 90 ? "#e24b4a" : p >= 70 ? "#ef9f27" : "#1d9e75");
 function fmtReset(iso) {
@@ -38,7 +39,7 @@ export default function UsageModal({ open, account, onClose }) {
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head"><span>📊 Usage · {account.label}</span><button onClick={onClose}>✕</button></div>
+        <div className="modal-head"><span>📊 Usage · {acctName(account)}</span><button onClick={onClose}>✕</button></div>
 
         {info && (
           <div className="acct-info">
@@ -62,6 +63,7 @@ export default function UsageModal({ open, account, onClose }) {
             <Bar label="7 ngày (tổng)" pct={u.sevenDayPct} reset={u.sevenDayResetsAt} />
             {u.opusPct != null && <Bar label="7 ngày · Opus" pct={u.opusPct} />}
             {u.sonnetPct != null && <Bar label="7 ngày · Sonnet" pct={u.sonnetPct} />}
+            {u.fablePct != null && <Bar label="7 ngày · Fable" pct={u.fablePct} />}
 
             {Array.isArray(u.limits) && u.limits.length > 0 && (
               <div className="usage-limits">
