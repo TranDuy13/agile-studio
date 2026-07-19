@@ -1,10 +1,10 @@
-// Lưu project + requirement vào JSON file (~/.agile-studio/studio.json).
+// Lưu project + requirement vào JSON file (<DATA_DIR>/studio.json).
 // App local 1 người dùng nên không cần DBMS; tránh native compile.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { config } from "./config.js";
 
-const DIR = join(homedir(), ".agile-studio");
+const DIR = config.dataDir;
 mkdirSync(DIR, { recursive: true });
 const FILE = join(DIR, "studio.json");
 

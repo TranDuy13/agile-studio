@@ -65,7 +65,8 @@ export default function AccountBadge({ event }) {
           <div key={a.id} className={"acct" + (on ? " on" : "") + (a.disabled ? " off" : "")}>
             <div className="acct-row">
               <span className="acct-dot" data-on={on} />
-              <button className="acct-label" onClick={() => setViewing(a)} title="Xem usage chi tiết">{a.label}</button>
+              <button className="acct-label" onClick={() => setViewing(a)}
+                title={"Xem usage chi tiết" + (a.email ? ` (${a.label})` : "")}>{a.email || a.label}</button>
               {a.disabled ? <span className="acct-off-tag">đã tắt</span>
                 : a.loggedIn === false ? <span className="acct-expired">hết hạn</span>
                 : on && <span className="acct-active">đang dùng</span>}

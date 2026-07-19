@@ -852,6 +852,7 @@ __metadata:
     concurrently: "npm:^9.1.0"
     cors: "npm:^2.8.5"
     discord.js: "npm:^14.16.3"
+    dotenv: "npm:^17.4.2"
     express: "npm:^4.21.2"
     react: "npm:^18.3.1"
     react-dom: "npm:^18.3.1"
@@ -1129,6 +1130,13 @@ __metadata:
     tslib: "npm:^2.6.3"
     undici: "npm:6.24.1"
   checksum: 10c0/267c44e53bbc78649558bd1e9e97964583fc827f204f2827d376fbe9d79c17600a5ec802ae6bce94bfc4473934f557abc39416cf27c68a878186b102f87f17fe
+  languageName: node
+  linkType: hard
+
+"dotenv@npm:^17.4.2":
+  version: 17.4.2
+  resolution: "dotenv@npm:17.4.2"
+  checksum: 10c0/164f8e77a646c8446867d5b588d26ea6005c8ea7c5eb41cf926f6113d23f2191355f6e0cfd95ea9bab98394a5b0a3f1e51a8399711b666fe55cc7b0bd745f942
   languageName: node
   linkType: hard
 

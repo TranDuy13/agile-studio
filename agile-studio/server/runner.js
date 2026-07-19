@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { defaultConfigDir } from "./accounts.js";
+import { claudeSpawn } from "./claudeBin.js";
 
 // Bỏ mã màu ANSI (\x1b[..m) khỏi output để log hiển thị sạch, không tràn/đè.
 const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, "");
@@ -91,7 +92,9 @@ export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCo
     else if (sessionId) args.push("--session-id", sessionId);
     if (model) args.push("--model", model); // model do người dùng cấu hình (alias hoặc full id)
     if (maxBudgetUsd > 0) args.push("--max-budget-usd", String(maxBudgetUsd)); // trần chi phí/role (tiết kiệm)
-    const child = spawn("claude", args, { cwd, env, detached: true }); // group riêng để kill cả cây con
+    // Resolve Claude CLI (fix ENOENT). detached để kill cả cây con; .cmd trên Windows cần shell.
+    const { bin, useShell } = claudeSpawn();
+    const child = spawn(bin, args, { cwd, env, detached: !useShell, shell: useShell });
     onSpawn?.(child);
 
     let buf = "";
@@ -137,7 +140,9 @@ export function runClaudeStream({ cwd, configDir, model, allowCommands = true, s
   if (resumeSessionId) args.push("--resume", resumeSessionId);
   else if (sessionId) args.push("--session-id", sessionId);
   if (model) args.push("--model", model);
-  const child = spawn("claude", args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  // Resolve Claude CLI (fix ENOENT). Prompt gửi qua stdin nên .cmd+shell an toàn.
+  const { bin, useShell } = claudeSpawn();
+  const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: !useShell, shell: useShell });
   onSpawn?.(child);
 
   let buf = "", stderr = "", lastResult = null;

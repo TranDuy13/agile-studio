@@ -2,6 +2,8 @@ node_modules/
 web/dist/
 
 # secrets / local config
+.env
+.env.local
 bot.config.json
 accounts.json
 

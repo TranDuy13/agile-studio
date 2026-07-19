@@ -12,12 +12,11 @@
 // Đổi vị trí skill bằng env AGILE_SKILLS_DIR nếu muốn tách hẳn thành repo riêng để publish.
 import { mkdirSync, existsSync, writeFileSync, readFileSync, appendFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, basename, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { ROLE_ORDER, ROLE_META } from "./runner.js";
+import { config } from "./config.js";
 
-const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), ".."); // .../agile-studio
-const SKILLS_DIR = process.env.AGILE_SKILLS_DIR || join(APP_ROOT, ".skill");
-const PROJECTS_DIR = join(APP_ROOT, "projects"); // workspace tài liệu managed theo từng project
+const SKILLS_DIR = config.skillsDir;         // thư viện skill tổng (env AGILE_SKILLS_DIR)
+const PROJECTS_DIR = config.projectsDir;     // workspace tài liệu managed (env PROJECTS_DIR)
 const LEARN_MARK = "<!-- LEARN -->"; // điểm chèn kinh nghiệm học được
 
 // ---------------------------------------------------------------------------
