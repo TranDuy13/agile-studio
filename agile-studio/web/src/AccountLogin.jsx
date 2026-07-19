@@ -24,7 +24,8 @@ export default function AccountLogin({ open, onClose, onDone, relogin }) {
       const j = await r.json();
       if (!r.ok || !j.url) throw new Error(j.error || "Không lấy được URL");
       setLoginId(j.loginId); setUrl(j.url); setStep("code");
-      window.open(j.url, "_blank", "noopener");
+      // KHÔNG tự mở tab ở đây (issue 12): claude CLI đã tự mở trình duyệt -> tránh mở 2 tab.
+      // Nếu CLI không mở, người dùng bấm link "mở link đăng nhập ↗" trong modal.
     } catch (e) { setErr(String(e.message)); setStep("label"); }
   };
 
@@ -48,8 +49,9 @@ export default function AccountLogin({ open, onClose, onDone, relogin }) {
 
         {step !== "code" && !relogin && (
           <label className="fld">
-            <span>Tên gợi nhớ cho account</span>
-            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="vd: acc-cty, gmail-2…" disabled={step === "busy"} />
+            <span>Tên gợi nhớ cho account <em className="fld-opt">(tuỳ chọn)</em></span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)}
+              placeholder="để trống = hiển thị email của tài khoản" disabled={step === "busy"} />
           </label>
         )}
         {step !== "code" && relogin && <div className="modal-req">Token của <b>{relogin.label}</b> đã hết hạn. Bấm để lấy link đăng nhập lại vào đúng account cũ.</div>}
@@ -74,7 +76,7 @@ export default function AccountLogin({ open, onClose, onDone, relogin }) {
           <span className="run-preview">{step === "busy" ? "Đang xử lý…" : ""}</span>
           {step === "code"
             ? <button className="primary" disabled={!code.trim() || step === "busy"} onClick={submitCode}>✓ Xác nhận & thêm</button>
-            : <button className="primary" disabled={(!relogin && !label.trim()) || step === "busy"} onClick={start}>▶ Lấy link đăng nhập</button>}
+            : <button className="primary" disabled={step === "busy"} onClick={start}>▶ Lấy link đăng nhập</button>}
         </div>
       </div>
     </div>

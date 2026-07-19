@@ -57,6 +57,22 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .acct-bar { height:4px; background:var(--surface2); border-radius:2px; overflow:hidden; }
 .acct-fill { height:100%; border-radius:2px; transition:width .4s; }
 .acct-pct { font-size:10px; color:var(--muted); margin-top:2px; }
+.acct-active { font-size:11px; color:var(--done); }
+/* info icon + popover chú thích (issue 15) */
+.acct-legend { position:relative; display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; cursor:help; outline:none; }
+.acct-legend .info-i { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+  border:1.5px solid var(--muted); border-radius:50%; color:var(--muted);
+  font-family:Georgia,"Times New Roman",serif; font-style:italic; font-weight:700; font-size:11px; line-height:1;
+  transition:color .15s, border-color .15s; }
+.acct-legend:hover .info-i, .acct-legend:focus-within .info-i { color:var(--accent); border-color:var(--accent); }
+.acct-legend-pop { position:absolute; bottom:calc(100% + 8px); right:0; z-index:60; min-width:200px;
+  background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:9px 11px;
+  box-shadow:0 10px 28px rgba(0,0,0,0.45); font-size:11px; color:var(--ink);
+  opacity:0; visibility:hidden; transform:translateY(4px); transition:opacity .13s ease, transform .13s ease; }
+.acct-legend:hover .acct-legend-pop, .acct-legend:focus-within .acct-legend-pop { opacity:1; visibility:visible; transform:none; }
+.legend-title { font-size:9px; letter-spacing:0.13em; text-transform:uppercase; color:var(--muted); margin-bottom:7px; }
+.legend-row { display:flex; gap:9px; padding:3px 0; align-items:baseline; color:var(--ink); }
+.legend-row > span:first-child { flex:0 0 44px; color:var(--accent); font-size:12px; }
 .acct-toast { font-size:11px; color:var(--done); margin-top:8px; padding:6px 8px; background:rgba(53,208,127,0.1); border-radius:6px; }
 .acct-toast.warn { color:var(--error); background:rgba(255,91,91,0.1); }
 

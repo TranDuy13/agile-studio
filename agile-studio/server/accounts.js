@@ -48,7 +48,8 @@ export function addAccount({ id, label, configDir }) {
   const list = loadAccounts().filter((a) => a.id !== id);
   // nếu đang là default duy nhất (chưa có file), giữ lại default khi thêm cái mới
   if (!existsSync(CFG)) list.push(loadDefault()[0]);
-  list.push({ id, label: label || id, configDir });
+  // label để TRỐNG nếu không có nickname (issue 13) -> UI hiển thị email thay thế.
+  list.push({ id, label: label || "", configDir });
   return saveAccounts(dedupe(list));
 }
 export function removeAccount(id) { return saveAccounts(loadAccounts().filter((a) => a.id !== id)); }
@@ -139,6 +140,11 @@ export async function emailFor(configDir) {
   if (email) profileCache.set(configDir, { email, at: Date.now() });
   return email;
 }
+// Xoá cache email (gọi sau khi (đăng nhập lại) account -> tránh hiện email cũ, lệch với profile thật).
+export function clearProfileCache(configDir) {
+  if (configDir) profileCache.delete(configDir);
+  else profileCache.clear();
+}
 
 // Trả về { fiveHourPct, sevenDayPct, resetsAt } hoặc null nếu không đọc được.
 export async function fetchUsage(configDir) {
@@ -164,6 +170,7 @@ export async function fetchUsage(configDir) {
       sevenDayResetsAt: j?.seven_day?.resets_at ?? null,
       opusPct: j?.seven_day_opus?.utilization ?? null,
       sonnetPct: j?.seven_day_sonnet?.utilization ?? null,
+      fablePct: j?.seven_day_fable?.utilization ?? null, // issue 14 (defensive: API có thể chưa trả)
       limits: Array.isArray(j?.limits) ? j.limits.map((l) => ({
         kind: l.kind, group: l.group, percent: l.percent, severity: l.severity,
         resetsAt: l.resets_at, active: l.is_active,

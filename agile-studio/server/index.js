@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 const pexecFile = promisify(execFile);
-import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn, emailFor } from "./accounts.js";
+import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn, emailFor, defaultConfigDir, clearProfileCache } from "./accounts.js";
 import { runClaude, runClaudeStream, copySessionTranscript, killChild, ROLE_ORDER, ROLE_META } from "./runner.js";
 import { claudeSpawn } from "./claudeBin.js";
 import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOutputs,
@@ -176,7 +176,8 @@ const logins = new Map(); // loginId -> { child, buf, id, label, configDir, done
 app.post("/api/accounts/login/start", (req, res) => {
   // accountId -> ĐĂNG NHẬP LẠI vào account cũ (dùng configDir cũ); không có -> tạo account mới.
   const relogin = req.body.accountId ? loadAccounts().find((a) => a.id === req.body.accountId) : null;
-  const label = relogin ? relogin.label : String(req.body.label || "Account").slice(0, 40);
+  // Nickname là TUỲ CHỌN (issue 13): để trống -> lưu "" và UI hiển thị email thay cho tên gợi nhớ.
+  const label = relogin ? relogin.label : String(req.body.label || "").slice(0, 40);
   const id = relogin ? relogin.id : "acc-" + Date.now().toString(36);
   const configDir = relogin ? relogin.configDir : newAccountConfigDir(id);
   let child, bin, useShell;
@@ -216,6 +217,22 @@ app.post("/api/accounts/login/code", async (req, res) => {
   });
 
   if (await isLoggedIn(entry.configDir)) {
+    clearProfileCache(entry.configDir); // vừa (đăng nhập lại) -> đọc email MỚI, tránh lệch (issue: name≠email)
+    // Guard trùng account (issue 11): nếu email vừa đăng nhập trùng 1 account KHÁC đã có -> từ chối.
+    const email = await emailFor(entry.configDir);
+    if (email) {
+      const others = loadAccounts().filter((a) => a.id !== entry.id);
+      const emails = await Promise.all(others.map((a) => emailFor(a.configDir).catch(() => null)));
+      if (emails.some((e) => e && e.toLowerCase() === email.toLowerCase())) {
+        try { entry.child.kill(); } catch {}
+        // dọn config dir TẠM của account mới (không đụng dir mặc định của account đã có)
+        if (entry.configDir && entry.configDir !== defaultConfigDir()) {
+          try { rmSync(entry.configDir, { recursive: true, force: true }); } catch {}
+        }
+        logins.delete(req.body.loginId);
+        return res.status(409).json({ error: `Account ${email} đã có trong danh sách.` });
+      }
+    }
     entry.accountAdded = true;
     addAccount({ id: entry.id, label: entry.label, configDir: entry.configDir });
     logins.delete(req.body.loginId);
