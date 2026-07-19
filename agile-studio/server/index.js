@@ -1,17 +1,18 @@
+import { config } from "./config.js"; // import ĐẦU TIÊN: nạp .env, nguồn duy nhất đọc env
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, basename } from "node:path";
 import { store } from "./store.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 const pexecFile = promisify(execFile);
-import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn } from "./accounts.js";
+import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn, emailFor } from "./accounts.js";
 import { runClaude, runClaudeStream, copySessionTranscript, killChild, ROLE_ORDER, ROLE_META } from "./runner.js";
+import { claudeSpawn } from "./claudeBin.js";
 import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOutputs,
   saveSkill, listDocs, readDoc, writeDoc } from "./scaffold.js";
 
@@ -19,8 +20,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "30mb" })); // đủ cho upload file requirement (base64)
 
-const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const REQ_UPLOAD = join(APP_ROOT, "requirements"); // file requirement lưu theo project trong agile-studio
+const REQ_UPLOAD = config.requirementsDir; // file đính kèm requirement (env REQUIREMENTS_DIR)
 
 const http = createServer(app);
 const wss = new WebSocketServer({ server: http });
@@ -151,11 +151,14 @@ app.delete("/api/requirements/:id/files/:idx", (req, res) => {
 app.get("/api/accounts", async (req, res) => {
   const withUsage = req.query.usage === "1"; // chỉ gọi API usage khi được yêu cầu (bấm refresh)
   const list = loadAccounts();
-  const accts = await Promise.all(list.map(async (a) => ({
-    id: a.id, label: a.label, disabled: !!a.disabled,
-    loggedIn: await isLoggedIn(a.configDir), // false = chưa login / token hết hạn -> cho nút đăng nhập lại
-    usage: withUsage ? await fetchUsage(a.configDir) : null,
-  })));
+  const accts = await Promise.all(list.map(async (a) => {
+    const loggedIn = await isLoggedIn(a.configDir); // false = chưa login / token hết hạn -> nút đăng nhập lại
+    return {
+      id: a.id, label: a.label, disabled: !!a.disabled, loggedIn,
+      email: loggedIn ? await emailFor(a.configDir) : null, // hiện email thật thay vì label (issue 02)
+      usage: withUsage ? await fetchUsage(a.configDir) : null,
+    };
+  }));
   const cfg = store.getSettings();
   const enabledU = accts.filter((a) => !a.disabled);
   const active = (cfg.preferredAccount && enabledU.some((a) => a.id === cfg.preferredAccount))
@@ -176,8 +179,10 @@ app.post("/api/accounts/login/start", (req, res) => {
   const label = relogin ? relogin.label : String(req.body.label || "Account").slice(0, 40);
   const id = relogin ? relogin.id : "acc-" + Date.now().toString(36);
   const configDir = relogin ? relogin.configDir : newAccountConfigDir(id);
-  let child;
-  try { child = spawn("claude", ["auth", "login", "--claudeai"], { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } }); }
+  let child, bin, useShell;
+  try { ({ bin, useShell } = claudeSpawn()); } // resolve Claude CLI (fix ENOENT); lỗi rõ ràng nếu thiếu
+  catch (e) { return res.status(500).json({ error: String(e.message) }); }
+  try { child = spawn(bin, ["auth", "login", "--claudeai"], { env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, shell: useShell }); }
   catch (e) { return res.status(500).json({ error: "Không chạy được claude: " + String(e.message) }); }
 
   const entry = { child, buf: "", id, label, configDir, done: false };
@@ -1042,7 +1047,7 @@ function hintFor(kind) {
 // khối này im lặng. Trong container thì ảnh đã build sẵn nên chỉ cần MỘT cổng, không phải dựng
 // thêm nginx chỉ để bê tệp tĩnh và proxy WebSocket.
 // Đặt SAU toàn bộ route `/api`: fallback SPA phải là cái cuối cùng, nếu không nó nuốt luôn API.
-const WEB_DIST = join(APP_ROOT, "web", "dist");
+const WEB_DIST = join(config.appRoot, "web", "dist");
 if (existsSync(WEB_DIST)) {
   app.use(express.static(WEB_DIST));
   // Mọi đường dẫn còn lại → index.html để router phía web tự xử. Trừ /api (đã khai ở trên, tới
@@ -1050,8 +1055,8 @@ if (existsSync(WEB_DIST)) {
   app.get(/^(?!\/(api|ws)(\/|$)).*/, (req, res) => res.sendFile(join(WEB_DIST, "index.html")));
 }
 
-// Cổng đổi được qua biến môi trường để container ánh xạ cổng mà không phải sửa mã.
-const PORT = Number(process.env.PORT || process.env.SERVER_PORT || 4311);
+// Cổng: PORT (container ánh xạ) → config.serverPort (SERVER_PORT trong .env) → mặc định.
+const PORT = Number(process.env.PORT) || config.serverPort;
 // Trong container phải nghe trên 0.0.0.0, nếu không cổng publish ra host sẽ không nối được.
 const HOST = process.env.HOST || "0.0.0.0";
 http.listen(PORT, HOST, () => console.log(`Agile Studio API + WS: http://localhost:${PORT}`
