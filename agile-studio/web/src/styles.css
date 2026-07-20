@@ -368,3 +368,15 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .ftog.on { opacity:1; border-color:var(--accent); color:var(--ink); background:var(--surface); }
 .ftog-emoji { font-size:16px; }
 .ftog-arrow { color:var(--dim); font-size:12px; }
+
+/* ---- responsive: stack sidebar above main on narrow windows (issue #19) ---- */
+/* Stacked, not an off-canvas drawer: both sidebar and main stay visible. */
+@media (max-width: 820px) {
+  .app { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+  .sidebar { border-right:none; border-bottom:1px solid var(--line); max-height:44vh; overflow:auto; }
+  .acct-row { flex-wrap:wrap; }
+  .topbar { flex-wrap:wrap; gap:10px 14px; }
+  .proj-title { margin-left:0; }
+  .docs { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+  .docs-list { border-right:none; border-bottom:1px solid var(--line); max-height:38vh; }
+}
