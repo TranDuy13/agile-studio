@@ -8,10 +8,18 @@ import { claudeSpawn } from "./claudeBin.js";
 // Bỏ mã màu ANSI (\x1b[..m) khỏi output để log hiển thị sạch, không tràn/đè.
 const stripAnsi = (s) => String(s).replace(/\x1b\[[0-9;]*m/g, "");
 
-// Kill claude + TOÀN BỘ tiến trình con (build/tsc/...) bằng cách kill cả process group,
-// và SIGKILL ép chết nếu SIGTERM không ăn (tránh treo ở "Đang dừng…").
+// Kill claude and its WHOLE child tree (build/tsc/...) so the app doesn't hang at "stopping".
 export function killChild(child) {
   if (!child || child.killed) return;
+  if (process.platform === "win32") {
+    // Windows has no POSIX process groups; and when spawned through a shell (.cmd) the child
+    // is cmd.exe with claude + build/tsc as grandchildren, so child.kill() reaps only cmd and
+    // leaves the tree alive. taskkill /T kills the whole tree by PID, /F forces it.
+    try { spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"]); }
+    catch { try { child.kill(); } catch {} }
+    return;
+  }
+  // POSIX: kill the whole process group (detached => negative pid = group), SIGKILL if SIGTERM is ignored.
   const grp = () => { try { process.kill(-child.pid, "SIGTERM"); return true; } catch { return false; } };
   if (!grp()) { try { child.kill("SIGTERM"); } catch {} }
   setTimeout(() => {
