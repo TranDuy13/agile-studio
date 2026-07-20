@@ -25,14 +25,30 @@ async function pickBackend() {
 
 const backend = await pickBackend();
 const data = (await backend.load()) || emptyData();
-await backend.save(data); // ensure the backend holds the current snapshot (persists a first-time migration)
+
+// Replace the live snapshot's contents in place so makeStore's closure keeps seeing updates.
+function adopt(merged) { if (merged && merged !== data) Object.assign(data, merged); }
+
+adopt(await backend.save(data)); // ensure the backend holds the current snapshot (persists a first-time migration)
 
 // Write-behind: mutations schedule a debounced flush so bursts of log writes batch into one save.
-// ponytail: whole-document last-writer-wins + a small debounce window; fine for one-machine-at-a-time
-// personal use. Add per-entity writes + row locking if two machines may edit concurrently.
-let timer = null;
-function flush() { timer = null; Promise.resolve(backend.save(data)).catch((e) => console.error("store persist failed:", e.message)); }
+// A concurrent backend (postgres) merges under a row lock and returns the merged document, so
+// flushing also pulls in other machines' changes — hence the periodic refresh below.
+let timer = null, flushing = false;
+async function flush() {
+  timer = null;
+  if (flushing) { scheduleSave(); return; } // don't overlap read-modify-write cycles
+  flushing = true;
+  try { adopt(await backend.save(data)); }
+  catch (e) { console.error("store persist failed:", e.message); }
+  finally { flushing = false; }
+}
 function scheduleSave() { if (!timer) timer = setTimeout(flush, 500); }
+
+// Concurrent backends: poll so a machine converges on edits made from another machine.
+// ponytail: whole-document merge on a fixed interval; fine for a couple of personal machines.
+// A busier/real-time setup would want per-row change feeds (LISTEN/NOTIFY) instead of polling.
+if (backend.concurrent) setInterval(() => { if (!timer && !flushing) flush(); }, 4000);
 
 // Best-effort flush on shutdown so the last debounced changes survive.
 for (const sig of ["SIGINT", "SIGTERM"]) {
