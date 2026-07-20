@@ -39,6 +39,25 @@ export function makeStore(data, save) {
       return w({ lastInsertRowid: id });
     },
     getProject(id) { return data.projects.find((p) => p.id === Number(id)); },
+    // Remove a project and everything attached to it. Files on disk are left alone:
+    // the repo belongs to the user, and a re-added project should find its docs again.
+    deleteProject(id) {
+      const pid = Number(id);
+      const before = data.projects.length;
+      data.projects = data.projects.filter((p) => p.id !== pid);
+      if (data.projects.length === before) return false;
+      data.requirements = data.requirements.filter((r) => r.project_id !== pid);
+      data.runs = data.runs.filter((r) => r.project_id !== pid);
+      delete data.logs?.[String(pid)];
+      delete data.docFiles?.[String(pid)];
+      for (const k of Object.keys(data.uploads || {})) if (k.startsWith(`${pid}/`)) delete data.uploads[k];
+      for (const [sid, s] of Object.entries(data.sessions || {}))
+        if (Number(s.projectId) === pid) { delete data.sessions[sid]; delete data.sessionLogs?.[sid]; }
+      for (const [scid, sc] of Object.entries(data.schedules || {}))
+        if (Number(sc.projectId) === pid) delete data.schedules[scid];
+      save();
+      return true;
+    },
 
     listRequirements(pid) {
       return data.requirements.filter((r) => r.project_id === Number(pid))

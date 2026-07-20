@@ -40,6 +40,16 @@ export default function App() {
   const loadProjects = useCallback(() => {
     fetch("/api/projects").then((r) => r.json()).then(setProjects);
   }, []);
+
+  // Remove a project from the app. Files on disk are untouched.
+  const deleteProject = async (p, e) => {
+    e?.stopPropagation();
+    if (!confirm(`Xoá project "${p.name}"?\n\nGỡ khỏi Agile Studio kèm requirement, log, tài liệu đã lưu, session và lịch của nó.\nKhông xoá file trên đĩa.`)) return;
+    await fetch(`/api/projects/${p.id}`, { method: "DELETE" });
+    setActive((cur) => (cur?.id === p.id ? null : cur));
+    setSelectedId(null);
+    loadProjects();
+  };
   useEffect(loadProjects, [loadProjects]);
 
   // model active thật + cấu hình mặc định + session đang có
@@ -162,11 +172,14 @@ export default function App() {
         <button className="add-proj" onClick={() => setAddProjOpen(true)}>+ Project</button>
         <div className="proj-list">
           {projects.map((p) => (
-            <button key={p.id} className={"proj" + (active?.id === p.id ? " on" : "")}
-              onClick={() => { setActive(p); setSelectedId(null); }}>
-              <span className="proj-name">{p.name}</span>
-              <span className="proj-path">{p.repo_path}</span>
-            </button>
+            <div key={p.id} className="proj-row">
+              <button className={"proj" + (active?.id === p.id ? " on" : "")}
+                onClick={() => { setActive(p); setSelectedId(null); }}>
+                <span className="proj-name">{p.name}</span>
+                <span className="proj-path">{p.repo_path}</span>
+              </button>
+              <button className="proj-del" title="Xoá project" onClick={(e) => deleteProject(p, e)}>🗑</button>
+            </div>
           ))}
           {!projects.length && <p className="empty">Chưa có project. Bấm + Project để thêm.</p>}
         </div>
