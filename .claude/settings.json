@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(*)",
+      "WebFetch(*)",
+      "WebSearch(*)"
+    ]
+  },
+  "enabledPlugins": {},
+  "defaultMode": "acceptEdits"
+}
