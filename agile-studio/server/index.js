@@ -3,9 +3,9 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
-import { store } from "./store.js";
+import { store, filesInStore } from "./store.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
@@ -15,6 +15,7 @@ import { runClaude, runClaudeStream, copySessionTranscript, killChild, ROLE_ORDE
 import { claudeSpawn } from "./claudeBin.js";
 import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOutputs,
   saveSkill, listDocs, readDoc, writeDoc } from "./scaffold.js";
+import { materializeDocs, syncDocsBack, saveUpload, materializeUpload, removeUpload } from "./workspace.js";
 
 const app = express();
 app.use(cors());
@@ -121,10 +122,9 @@ app.post("/api/requirements/:id/files", (req, res) => {
   if (!name || !data) return res.status(400).json({ error: "Thiếu name/data" });
   const safe = basename(String(name)).replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "file";
   const dir = join(REQ_UPLOAD, String(r.project_id), String(r.id));
-  mkdirSync(dir, { recursive: true });
   const buf = Buffer.from(String(data).replace(/^data:[^,]*,/, ""), "base64");
   const fp = join(dir, safe);
-  writeFileSync(fp, buf);
+  saveUpload(r.project_id, r.id, safe, buf, fp); // store keeps the durable copy; disk is what agents read
   const meta = { name: safe, size: buf.length, path: fp, uploadedAt: new Date().toISOString() };
   store.addRequirementFile(r.id, meta);
   broadcast({ type: "requirement:updated", projectId: r.project_id });
@@ -135,15 +135,16 @@ app.post("/api/requirements/:id/files", (req, res) => {
 app.get("/api/requirements/:id/files/:idx", (req, res) => {
   const r = store.getRequirement(req.params.id);
   const f = r && r.files && r.files[Number(req.params.idx)];
-  if (!f || !existsSync(f.path)) return res.status(404).json({ error: "Không thấy file" });
+  // Recreate from the store when the file isn't on this machine's disk yet.
+  if (!f || !materializeUpload(r.project_id, r.id, f.name, f.path)) return res.status(404).json({ error: "Không thấy file" });
   res.download(f.path, f.name);
 });
 
 // Xoá file đính kèm.
 app.delete("/api/requirements/:id/files/:idx", (req, res) => {
   const f = store.removeRequirementFile(req.params.id, Number(req.params.idx));
-  if (f && f.path) { try { rmSync(f.path); } catch {} }
   const r = store.getRequirement(req.params.id);
+  if (f) removeUpload(r?.project_id, req.params.id, f.name, f.path);
   if (r) broadcast({ type: "requirement:updated", projectId: r.project_id });
   res.json({ ok: true });
 });
@@ -317,19 +318,24 @@ app.put("/api/skills/:file", (req, res) => {
 app.get("/api/projects/:id/docs", (req, res) => {
   const p = store.getProject(req.params.id); if (!p) return res.status(404).json({ error: "Không thấy project" });
   const ws = resolveWorkspace(p.repo_path, p.name);
+  materializeDocs(p.id, ws); // bring this machine's disk up to date with the store first
   res.json({ mode: ws.mode, docsDir: ws.docsDir, files: listDocs(ws.docsDir) });
 });
 app.get("/api/projects/:id/docs/file", (req, res) => {
   const p = store.getProject(req.params.id); if (!p) return res.status(404).json({ error: "Không thấy project" });
   const ws = resolveWorkspace(p.repo_path, p.name);
+  materializeDocs(p.id, ws);
   try { res.json({ path: req.query.path, content: readDoc(ws.docsDir, req.query.path || "") }); }
   catch (e) { res.status(400).json({ error: String(e.message) }); }
 });
 app.put("/api/projects/:id/docs/file", (req, res) => {
   const p = store.getProject(req.params.id); if (!p) return res.status(404).json({ error: "Không thấy project" });
   const ws = resolveWorkspace(p.repo_path, p.name);
-  try { res.json(writeDoc(ws.docsDir, req.body.path || "", req.body.content || "")); }
-  catch (e) { res.status(400).json({ error: String(e.message) }); }
+  try {
+    const out = writeDoc(ws.docsDir, req.body.path || "", req.body.content || "");
+    if (filesInStore && ws.mode === "managed") store.writeDocFile(p.id, out.path, req.body.content || ""); // keep the durable copy in sync
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: String(e.message) }); }
 });
 
 // Log hoạt động đã lưu của 1 project (để xem lại trên UI).
@@ -352,6 +358,25 @@ function sessionPublic(s) {
     nodes: nodesPublic(s),
   };
 }
+// Mirror the managed doc workspace from disk back into the store, so whatever the agent wrote
+// travels with the database. Hooked into persist() because that is called at every node
+// boundary and on every terminal transition, which covers all of the flow's exit paths.
+// Throttled while a run is in progress; always run once the session leaves "running".
+const wsCache = new Map();    // projectId -> resolved workspace
+const wsSyncedAt = new Map(); // projectId -> last sync timestamp
+function syncWorkspace(s) {
+  if (!filesInStore || !s?.projectId || !s.repoPath) return;
+  const terminal = s.status !== "running";
+  const now = Date.now();
+  if (!terminal && now - (wsSyncedAt.get(s.projectId) || 0) < 5000) return;
+  wsSyncedAt.set(s.projectId, now);
+  try {
+    let ws = wsCache.get(s.projectId);
+    if (!ws) { ws = resolveWorkspace(s.repoPath, s.projectName); wsCache.set(s.projectId, ws); }
+    syncDocsBack(s.projectId, ws);
+  } catch { /* never let workspace mirroring break a run */ }
+}
+
 // Lưu slim (đã serialize được) ra đĩa để sống sót qua restart + resume.
 function persist(s) {
   store.saveSession({
@@ -362,6 +387,7 @@ function persist(s) {
     status: s.status, activeAccount: s.activeAccount, startedAt: s.startedAt, updatedAt: Date.now(),
     error: s.error || null, nodes: s.nodes,
   });
+  syncWorkspace(s);
 }
 // Dựng lại session in-memory từ bản slim đã lưu.
 function reconstruct(slim) {
@@ -449,7 +475,10 @@ function startSession(project, body = {}) {
   if (requirementId) {
     const rq = store.getRequirement(requirementId);
     if (rq) {
-      const files = (rq.files || []).map((f) => f.path).filter((p) => existsSync(p));
+      // Agents read attachments by absolute path, so restore any that this machine lacks.
+      const files = (rq.files || [])
+        .filter((f) => materializeUpload(rq.project_id, rq.id, f.name, f.path))
+        .map((f) => f.path);
       note = `Đây là PHÂN TÍCH YÊU CẦU MỚI của khách hàng.\nNội dung requirement: "${rq.body}".`
         + (files.length ? `\nĐọc kỹ các file đính kèm (đường dẫn tuyệt đối): ${files.join(", ")}.` : "")
         + `\nPhân tích và cập nhật tài liệu tương ứng; nếu cần, đề xuất/bổ sung 1 feature gấp trong kế hoạch để đáp ứng requirement này.`
@@ -833,9 +862,14 @@ async function runSession(s, resume = false) {
   let ws = { docsDir: join(s.repoPath, "document"), mode: "repo", created: [] };
   try {
     ws = resolveWorkspace(s.repoPath, s.projectName);
+    // DB drivers: the store is the source of truth — lay the workspace down on this machine's
+    // disk before any agent runs, and pick up anything that only existed on disk until now.
+    const restored = materializeDocs(s.projectId, ws);
+    syncDocsBack(s.projectId, ws);
     flog({ role: "flow", roleName: "Skill", emoji: "📁", kind: "info",
-      text: ws.mode === "repo" ? `Dùng tài liệu sẵn có: ${ws.docsDir}`
-        : `Sinh bộ agile chuẩn (ngoài repo): ${ws.docsDir}` + (ws.created.length ? ` · tạo: ${ws.created.join(", ")}` : "") });
+      text: (ws.mode === "repo" ? `Dùng tài liệu sẵn có: ${ws.docsDir}`
+        : `Sinh bộ agile chuẩn (ngoài repo): ${ws.docsDir}` + (ws.created.length ? ` · tạo: ${ws.created.join(", ")}` : ""))
+        + (restored ? ` · khôi phục ${restored} file từ DB` : "") });
   } catch (e) {
     flog({ role: "flow", roleName: "Skill", emoji: "📁", kind: "error", text: "Lỗi workspace: " + String(e.message) });
   }
