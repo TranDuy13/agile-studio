@@ -427,6 +427,8 @@ function sessionPublic(s) {
     id: s.id, projectId: s.projectId, projectName: s.projectName, feature: s.feature,
     roles: s.roles, model: s.model, economy: s.economy, maxBudgetUsd: s.maxBudgetUsd,
     status: s.status, activeAccount: s.activeAccount, startedAt: s.startedAt, cost: s.cost || 0,
+    tokens: s.tokens || 0, usageAccount: s.usageAccount || null,
+    fivePctUsed: (s.fivePctStart != null && s.fivePctEnd != null) ? Math.max(0, s.fivePctEnd - s.fivePctStart) : null,
     requirementId: s.requirementId || null, saveLog: !!s.saveLog, liveMode: !!s.liveMode,
     streamLog: !!s.streamLog, threadId: s.threadId || null,
     queue: (s.queue || []).map((q) => ({ id: q.id, text: q.text, roles: q.roles || [], applied: !!q.applied })),
@@ -453,6 +455,22 @@ function syncWorkspace(s) {
   } catch { /* never let workspace mirroring break a run */ }
 }
 
+// Accumulate a job's cost + token usage from a result event ({cost, usage}).
+function addUsage(s, d) {
+  if (d?.cost) s.cost = (s.cost || 0) + d.cost;
+  const u = d?.usage;
+  if (u) s.tokens = (s.tokens || 0)
+    + (u.input_tokens || 0) + (u.output_tokens || 0)
+    + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+}
+// Record the account's rolling 5h usage % across a job: first reading = start, latest = end.
+// The delta approximates the job's share of the 5h limit (the window is shared, so it's a hint).
+function noteFive(s, accountId, pct) {
+  if (pct == null) return;
+  if (s.fivePctStart == null) { s.fivePctStart = pct; s.usageAccount = accountId; }
+  s.fivePctEnd = pct;
+}
+
 // Lưu slim (đã serialize được) ra đĩa để sống sót qua restart + resume.
 function persist(s) {
   store.saveSession({
@@ -461,6 +479,8 @@ function persist(s) {
     note: s.note || "", requirementId: s.requirementId || null, saveLog: !!s.saveLog, liveMode: !!s.liveMode,
     streamLog: !!s.streamLog, threadId: s.threadId || null, queue: s.queue || [],
     status: s.status, activeAccount: s.activeAccount, startedAt: s.startedAt, updatedAt: Date.now(),
+    cost: s.cost || 0, tokens: s.tokens || 0,
+    fivePctStart: s.fivePctStart ?? null, fivePctEnd: s.fivePctEnd ?? null, usageAccount: s.usageAccount || null,
     error: s.error || null, nodes: s.nodes,
   });
   syncWorkspace(s);
@@ -570,6 +590,7 @@ function startSession(project, body = {}) {
     id: "s" + Date.now().toString(36) + (++SEQ), projectId: project.id, projectName: project.name,
     repoPath: project.repo_path, feature, roles, runSet, model, economy, maxBudgetUsd,
     note, requirementId, saveLog, liveMode, streamLog: false, threadId: null, queue: [], cost: 0,
+    tokens: 0, fivePctStart: null, fivePctEnd: null, usageAccount: null, // per-job usage metrics
     status: "running", activeAccount: startAccount, currentChild: null, cancelRequested: false,
     startedAt: Date.now(), nodes,
   };
@@ -797,6 +818,7 @@ async function ensureAccountFor(s) {
     s.activeAccount = chosen.id;
     broadcast({ type: "account:switched", session: s.id, to: chosen.id, label: chosen.label, usage: chosen.usage });
   }
+  noteFive(s, chosen.id, chosen.usage?.fiveHourPct); // capture 5h% at node start (start once, refresh end)
   return chosen;
 }
 
@@ -849,7 +871,7 @@ async function runLiveNode(s, roleId, meta, prompt, run, { setNode, emit, flog }
         onEvent: (d) => { if (d.kind !== "result") { setNode(roleId, { activity: d.text });
           emit({ type: "node:activity", id: roleId, ...d });
           flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: d.kind, text: d.text }); } },
-        onTurnEnd: (d) => { s.nodes[roleId].claudeCreated = true; if (d?.cost) s.cost = (s.cost || 0) + d.cost; inFlight = null; pump(); },
+        onTurnEnd: (d) => { s.nodes[roleId].claudeCreated = true; addUsage(s, d); inFlight = null; pump(); },
       });
       s.live = { roleId, inject: pump };
 
@@ -857,6 +879,7 @@ async function runLiveNode(s, roleId, meta, prompt, run, { setNode, emit, flog }
       watch = setInterval(async () => {
         try {
           const u = await fetchUsage(account.configDir);
+          noteFive(s, account.id, u?.fiveHourPct);
           if (u?.fiveHourPct != null && u.fiveHourPct >= threshold) {
             const nb = await bestOtherAccountBelow(account.id, threshold);
             if (nb) { switchProactive = true; clearInterval(watch);
@@ -1047,6 +1070,7 @@ async function runSession(s, resume = false) {
       const watch = setInterval(async () => {
         try {
           const u = await fetchUsage(account.configDir);
+          noteFive(s, account.id, u?.fiveHourPct);
           if (u?.fiveHourPct != null && u.fiveHourPct >= threshold) {
             const next = await bestOtherAccountBelow(account.id, threshold);
             if (next) {
@@ -1071,7 +1095,7 @@ async function runSession(s, resume = false) {
             flog({ role: roleId, roleName: meta.name, emoji: meta.emoji, kind: d.kind, text: d.text });
           },
         });
-        if (out?.result?.cost) s.cost = (s.cost || 0) + out.result.cost; // cộng dồn chi phí
+        addUsage(s, out?.result); // cộng dồn chi phí + token
         clearInterval(watch); s.currentChild = null;
         // nhớ account đã chạy để lần bổ sung sau --resume đúng nơi có lịch sử hội thoại
         setNode(roleId, { status: "done", activity: "✓ hoàn tất", claudeAccount: account.id });
