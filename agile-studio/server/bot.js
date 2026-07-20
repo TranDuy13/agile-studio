@@ -1,9 +1,10 @@
 // Discord bot điều khiển Agile Studio từ xa + nhận thông báo.
 // Chạy CÙNG MÁY với server (gọi localhost:4311). Bot kết nối RA Discord nên không cần mở cổng.
 //
-// Cấu hình: bot.config.json (trong project, gitignored) hoặc ~/.agile-studio/bot.json:
-//   { "discordToken":"...", "channelId":"...", "mentionUserId":"...", "api":"http://localhost:4311", "prefix":"!" }
-// Cần bật intent "MESSAGE CONTENT" cho bot ở Discord Developer Portal.
+// Config: `.env` is the primary source — DISCORD_TOKEN / DISCORD_CHANNEL / DISCORD_MENTION /
+//   DISCORD_PREFIX / AGILE_API. A bot.config.json (gitignored) / ~/.agile-studio/bot.json still
+//   works as an optional local fallback. Enable the "MESSAGE CONTENT" intent in the Discord portal.
+import "dotenv/config"; // load .env (the bot is its own `npm run bot` process, not routed through server/config.js)
 import { WebSocket } from "ws";
 import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from "discord.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -18,11 +19,11 @@ if (cfgPath) console.log("Đọc config:", cfgPath);
 const TOKEN = process.env.DISCORD_TOKEN || cfg.discordToken;
 const CHANNEL = process.env.DISCORD_CHANNEL || cfg.channelId || "";
 const API = (process.env.AGILE_API || cfg.api || "http://localhost:4311").replace(/\/$/, "");
-const PREFIX = cfg.prefix || "!";
+const PREFIX = process.env.DISCORD_PREFIX || cfg.prefix || "!";
 const MENTION = process.env.DISCORD_MENTION || cfg.mentionUserId || "";
 const ping = MENTION ? `<@${MENTION}> ` : "";
 if (!TOKEN) {
-  console.error("⚠ Chưa có discordToken trong bot.config.json — bot idle (không giật sập npm run dev).");
+  console.error("⚠ Chưa có DISCORD_TOKEN trong .env (hay bot.config.json) — bot idle (không giật sập npm run dev).");
   setInterval(() => {}, 1 << 30);
 }
 
