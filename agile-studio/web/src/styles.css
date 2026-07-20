@@ -177,6 +177,8 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .scard-resume { background:var(--done); color:#0a0d18; border:none; border-radius:6px; padding:3px 9px; font-size:10px; font-weight:600; cursor:pointer; font-family:inherit; }
 .scard-feature { font-weight:600; font-size:13px; line-height:1.35; max-height:2.7em; overflow:hidden; }
 .scard-meta { display:flex; flex-wrap:wrap; gap:5px; }
+.scard-usage { display:flex; flex-wrap:wrap; gap:5px; margin-top:5px; }
+.scard-usage .tag { background:var(--surface2); border-color:var(--line); font-size:10px; }
 .tag { font-size:10px; padding:2px 7px; border-radius:6px; background:var(--surface2); color:var(--muted); border:1px solid var(--line); }
 .tag.mode { color:var(--accent); border-color:var(--accent); }
 .tag.st-running { color:var(--running); } .tag.st-done { color:var(--done); } .tag.st-error { color:var(--error); }

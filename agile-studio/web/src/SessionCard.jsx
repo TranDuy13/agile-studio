@@ -2,6 +2,7 @@ import React from "react";
 import { ROLE_ORDER, presetOf } from "./presets.js";
 
 const STATUS_LABEL = { running: "Đang chạy", done: "Hoàn tất", stopped: "Đã dừng", error: "Lỗi" };
+const fmtTokens = (t) => t >= 1e6 ? (t / 1e6).toFixed(1) + "M" : t >= 1e3 ? (t / 1e3).toFixed(1) + "K" : String(t || 0);
 
 // Card tóm tắt 1 session: feature, mode, model, node đang làm, tiến độ. Click để xem chi tiết.
 // session.nodes là MAP { roleId -> {status, activity, emoji, name, account} }.
@@ -36,6 +37,14 @@ export default function SessionCard({ session, selected, onSelect, onStop, onRes
         <span className="tag">🧠 {session.model || "mặc định"}</span>
         {session.activeAccount && <span className="tag">👤 {session.activeAccount}</span>}
       </div>
+
+      {(session.tokens > 0 || session.cost > 0 || session.fivePctUsed != null) && (
+        <div className="scard-usage">
+          {session.tokens > 0 && <span className="tag" title="Tổng token đã dùng cho công việc này">🔢 {fmtTokens(session.tokens)} token</span>}
+          {session.fivePctUsed != null && <span className="tag" title={"≈ % giới hạn 5h công việc này tiêu thụ" + (session.usageAccount ? ` (acct ${session.usageAccount})` : "")}>⏳ {session.fivePctUsed.toFixed(1)}% /5h</span>}
+          {session.cost > 0 && <span className="tag" title="Chi phí ước tính">💰 ${session.cost.toFixed(2)}</span>}
+        </div>
+      )}
 
       <div className="scard-flow">
         {ROLE_ORDER.map((rid) => {
