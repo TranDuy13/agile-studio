@@ -10,6 +10,12 @@ import { makeSqliteBackend } from "./sqlite.js";
 
 const driver = (process.env.STORAGE_DRIVER || "json").toLowerCase();
 
+// Which engine is active, and whether project files (docs workspace + requirement uploads)
+// must live in the store. With json the local disk already is the single machine's copy;
+// with a DB the files have to travel in the DB, and disk becomes a materialized working copy.
+export const storageDriver = driver;
+export const filesInStore = driver !== "json";
+
 async function pickBackend() {
   if (driver === "json") return makeJsonBackend();
   if (driver === "sqlite") return makeSqliteBackend();

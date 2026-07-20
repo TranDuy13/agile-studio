@@ -4,7 +4,7 @@
 
 export function emptyData() {
   return { projects: [], requirements: [], runs: [], logs: {}, sessions: {},
-    sessionLogs: {}, schedules: {}, settings: {}, seq: 1 };
+    sessionLogs: {}, schedules: {}, settings: {}, docFiles: {}, uploads: {}, seq: 1 };
 }
 
 // Fill any missing top-level keys so an older/partial snapshot is safe to use.
@@ -12,7 +12,8 @@ export function normalizeData(d) {
   const e = emptyData();
   return { ...e, ...d,
     logs: d.logs || {}, sessions: d.sessions || {}, sessionLogs: d.sessionLogs || {},
-    schedules: d.schedules || {}, settings: d.settings || {}, seq: d.seq || 1 };
+    schedules: d.schedules || {}, settings: d.settings || {},
+    docFiles: d.docFiles || {}, uploads: d.uploads || {}, seq: d.seq || 1 };
 }
 
 // Settings defaults, shared so every backend returns the same normalized shape.
@@ -119,6 +120,30 @@ export function makeStore(data, save) {
     getSchedule(id) { return data.schedules?.[id]; },
     saveSchedule(sc) { (data.schedules ||= {})[sc.id] = sc; return w(sc); },
     deleteSchedule(id) { if (data.schedules) delete data.schedules[id]; save(); },
+
+    // ---- Project doc workspace, stored in the DB so it travels between machines ----
+    // Agents read/write the real files on disk, so disk stays the working copy; these
+    // entries are the durable copy that gets materialized before a run and synced back after.
+    listDocFiles(pid) {
+      const m = data.docFiles?.[String(pid)] || {};
+      return Object.entries(m).map(([path, content]) => ({ path, size: Buffer.byteLength(content, "utf8") }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+    },
+    readDocFile(pid, rel) { return data.docFiles?.[String(pid)]?.[rel] ?? null; },
+    writeDocFile(pid, rel, content) {
+      ((data.docFiles ||= {})[String(pid)] ||= {})[rel] = String(content);
+      save();
+    },
+    deleteDocFile(pid, rel) {
+      const m = data.docFiles?.[String(pid)];
+      if (m && rel in m) { delete m[rel]; save(); }
+    },
+
+    // ---- Requirement upload blobs (base64), keyed "<projectId>/<requirementId>/<name>" ----
+    listUploadKeys() { return Object.keys(data.uploads || {}); },
+    readUpload(key) { return data.uploads?.[key] ?? null; },
+    writeUpload(key, base64) { (data.uploads ||= {})[key] = String(base64); save(); },
+    deleteUpload(key) { if (data.uploads && key in data.uploads) { delete data.uploads[key]; save(); } },
 
     // Global settings (model + token economy, webhooks, account prefs).
     getSettings() { return normalizeSettings(data.settings || {}); },
