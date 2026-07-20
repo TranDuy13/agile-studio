@@ -11,16 +11,16 @@ Bot chạy **cùng máy** với server (gọi `localhost:4311`) và kết nối 
    - Tab **OAuth2 → URL Generator**: scopes `bot`, quyền `Send Messages` + `Read Message History` → mở link, mời bot vào server của bạn.
    - Lấy **Channel ID**: bật Developer Mode (User Settings → Advanced), chuột phải kênh → Copy ID.
 
-2. **Cấu hình** — tạo file `~/.agile-studio/bot.json`:
-   ```json
-   {
-     "discordToken": "TOKEN_CỦA_BOT",
-     "channelId": "ID_KÊNH_NHẬN_LỆNH_VÀ_THÔNG_BÁO",
-     "api": "http://localhost:4311",
-     "prefix": "!"
-   }
+2. **Cấu hình** — nguồn chính là `.env` (copy từ `.env.example`):
+   ```env
+   DISCORD_TOKEN=TOKEN_CỦA_BOT
+   DISCORD_CHANNEL=ID_KÊNH_NHẬN_LỆNH_VÀ_THÔNG_BÁO
+   DISCORD_MENTION=          # tuỳ chọn: user id để @ping
+   DISCORD_PREFIX=!          # tuỳ chọn, mặc định !
+   AGILE_API=http://localhost:4311
    ```
-   (hoặc dùng env `DISCORD_TOKEN`, `DISCORD_CHANNEL`, `AGILE_API`.)
+   Fallback (tuỳ chọn) cho máy local: file `bot.config.json` trong project (gitignored) hoặc
+   `~/.agile-studio/bot.json` với các key `discordToken`/`channelId`/`mentionUserId`/`api`/`prefix`.
 
 3. **Cài & chạy:**
    ```bash
