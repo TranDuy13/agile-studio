@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { store, filesInStore } from "./store.js";
 import { spawn, execFile } from "node:child_process";
@@ -90,6 +90,82 @@ app.post("/api/projects", (req, res) => {
   if (!existsSync(repo_path)) return res.status(400).json({ error: "Đường dẫn không tồn tại" });
   try { const r = store.addProject(name, repo_path); res.json({ id: r.lastInsertRowid }); }
   catch (e) { res.status(400).json({ error: String(e.message) }); }
+});
+
+// Xoá project: gỡ khỏi app (kèm requirement/log/tài liệu/session/lịch). KHÔNG đụng file trên đĩa.
+app.delete("/api/projects/:id", (req, res) => {
+  const pid = Number(req.params.id);
+  // Stop and drop this project's in-memory sessions first, so nothing keeps running headless.
+  for (const s of [...sessions.values()].filter((x) => Number(x.projectId) === pid)) {
+    s.cancelRequested = true;
+    if (s.currentChild) killChild(s.currentChild);
+    sessions.delete(s.id);
+    broadcast({ type: "session:removed", session: s.id });
+  }
+  if (!store.deleteProject(pid)) return res.status(404).json({ error: "Không thấy project" });
+  broadcast({ type: "projects:changed" });
+  res.json({ ok: true });
+});
+
+// Ổ đĩa có trên máy (Windows: A:..Z: đang tồn tại; POSIX: "/").
+app.get("/api/drives", (req, res) => {
+  if (process.platform !== "win32") return res.json({ drives: ["/"] });
+  const drives = [];
+  for (let c = 65; c <= 90; c++) {
+    const d = String.fromCharCode(c) + ":/";
+    try { if (existsSync(d)) drives.push(d); } catch {}
+  }
+  res.json({ drives });
+});
+
+// Quét 1 đường dẫn để tìm ứng viên project.
+//   mode=folders : thư mục con trực tiếp
+//   mode=repos   : git repo (thư mục có .git) tới độ sâu `depth`, không chui vào repo đã thấy
+const SCAN_SKIP = new Set(["node_modules", "$RECYCLE.BIN", "System Volume Information", "Windows",
+  "Program Files", "Program Files (x86)", "ProgramData", "AppData", "dist", "build", "vendor", "venv"]);
+const SCAN_LIMIT = 800; // đủ cho 1 ổ đĩa, tránh treo UI
+
+app.get("/api/scan", (req, res) => {
+  const root = String(req.query.path || "");
+  const mode = req.query.mode === "repos" ? "repos" : "folders";
+  const depth = Math.min(6, Math.max(1, Number(req.query.depth) || (mode === "repos" ? 3 : 1)));
+  if (!root || !existsSync(root)) return res.status(400).json({ error: "Đường dẫn không tồn tại" });
+
+  const items = [];
+  const walk = (dir, level) => {
+    if (items.length >= SCAN_LIMIT || level > depth) return;
+    let ents; try { ents = readdirSync(dir, { withFileTypes: true }); } catch { return; } // bỏ qua thư mục không có quyền
+    for (const ent of ents) {
+      if (items.length >= SCAN_LIMIT) return;
+      if (!ent.isDirectory() || ent.name.startsWith(".") || SCAN_SKIP.has(ent.name)) continue;
+      const full = join(dir, ent.name);
+      const isGit = existsSync(join(full, ".git"));
+      if (mode === "repos") {
+        if (isGit) { items.push({ name: ent.name, path: full, isGit: true }); continue; } // không quét sâu trong repo
+        walk(full, level + 1);
+      } else {
+        items.push({ name: ent.name, path: full, isGit });
+      }
+    }
+  };
+  walk(root, 1);
+  items.sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ root, mode, truncated: items.length >= SCAN_LIMIT, items });
+});
+
+// Thêm nhiều project cùng lúc; bỏ qua path không tồn tại / đã có.
+app.post("/api/projects/bulk", (req, res) => {
+  const list = Array.isArray(req.body?.items) ? req.body.items : [];
+  const added = [], skipped = [];
+  for (const it of list) {
+    const repo_path = String(it?.repo_path || "").trim();
+    const name = String(it?.name || "").trim() || basename(repo_path) || "project";
+    if (!repo_path || !existsSync(repo_path)) { skipped.push({ repo_path, reason: "Đường dẫn không tồn tại" }); continue; }
+    try { const r = store.addProject(name, repo_path); added.push({ id: r.lastInsertRowid, name, repo_path }); }
+    catch (e) { skipped.push({ repo_path, reason: String(e.message) }); }
+  }
+  if (added.length) broadcast({ type: "projects:changed" });
+  res.json({ added, skipped });
 });
 
 app.get("/api/projects/:id/requirements", (req, res) =>
