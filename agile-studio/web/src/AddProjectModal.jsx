@@ -173,7 +173,7 @@ export default function AddProjectModal({ open, onClose, onCreated }) {
                     {picked.size}/{items.length} chọn{truncated ? " · đã cắt bớt (quá nhiều kết quả)" : ""}
                   </span>
                 </div>
-                <div className="scan-list">
+                <div className="scan-list thin-scroll">
                   {items.map((i) => (
                     <label key={i.path} className="scan-row">
                       <input type="checkbox" checked={picked.has(i.path)} onChange={() => toggle(i.path)} />

@@ -29,6 +29,7 @@ export default function IntegrationStatus({ version }) {
   const [open, setOpen] = useState(null); // "storage" | "bot"
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [reveal, setReveal] = useState(false); // hiện chuỗi kết nối DB (mặc định che)
 
   const load = useCallback((probe) =>
     fetch("/api/integrations" + (probe ? "?probe=1" : "")).then((r) => r.json()).then(setData).catch(() => {}), []);
@@ -50,13 +51,21 @@ export default function IntegrationStatus({ version }) {
   if (!data) return null;
   const s = data.storage, b = data.bot;
   const cur = open === "storage" ? s : open === "bot" ? b : null;
+  // Chỉ cho "Thử lại" khi thực sự có tác dụng: storage phải là postgres VÀ đang lỗi
+  // (json/sqlite cục bộ, hoặc đang OK, thì bấm lại vô nghĩa); bot thì khi chưa kết nối.
+  const canRetry = cur && (open === "storage"
+    ? (s.state !== "ok" && s.driver === "postgres")
+    : b.state !== "ok");
+  // Chuỗi đích của storage nhạy cảm (host/DB) — che, có nút con mắt để xem.
+  const target = s.target || "";
+  const masked = target.replace(/./g, "•");
 
   return (
     <div className="integs">
       <div className="acct-title"><span>Kết nối</span></div>
-      <Row id="storage" icon="🗄" title={"Storage · " + s.driver} state={s.state} onOpen={(x) => { setNote(""); setOpen(x); }}
+      <Row id="storage" icon="🗄" title={"Storage · " + s.driver} state={s.state} onOpen={(x) => { setNote(""); setReveal(false); setOpen(x); }}
         sub={s.state === "ok" ? (s.concurrent ? "chia sẻ nhiều máy" : "cục bộ") : LABEL[s.state]} />
-      <Row id="bot" icon="🤖" title="Discord bot" state={b.state} onOpen={(x) => { setNote(""); setOpen(x); }}
+      <Row id="bot" icon="🤖" title="Discord bot" state={b.state} onOpen={(x) => { setNote(""); setReveal(false); setOpen(x); }}
         sub={b.state === "ok" ? (b.user || "online") : LABEL[b.state]} />
 
       {cur && (
@@ -73,7 +82,15 @@ export default function IntegrationStatus({ version }) {
               {open === "storage" ? (
                 <>
                   <div className="acct-info-row"><span>Driver</span><b>{s.driver}</b></div>
-                  <div className="acct-info-row dim"><span>Đích</span><code>{s.target}</code></div>
+                  <div className="integ-target">
+                    <div className="integ-target-head">
+                      <span>Đích</span>
+                      <button className="eye-btn" onClick={() => setReveal((v) => !v)}
+                        title={reveal ? "Ẩn" : "Hiện chuỗi kết nối"} aria-label={reveal ? "Ẩn" : "Hiện"}>
+                        {reveal ? "🙈" : "👁"}</button>
+                    </div>
+                    <code className="integ-target-val">{reveal ? target : masked}</code>
+                  </div>
                   <div className="acct-info-row"><span>Dùng chung nhiều máy</span><b>{s.concurrent ? "có (merge + poll 4s)" : "không"}</b></div>
                   <div className="acct-info-row"><span>File tài liệu lưu trong DB</span><b>{s.filesInStore ? "có" : "không (chỉ trên đĩa)"}</b></div>
                   <div className="acct-info-row"><span>Ghi thành công lần cuối</span><b>{ago(s.lastOkAt)}</b></div>
@@ -98,8 +115,10 @@ export default function IntegrationStatus({ version }) {
 
             <div className="modal-foot">
               <button className="ghost-btn" onClick={() => location.reload()}>⟳ Tải lại trang</button>
-              <button className="primary" disabled={busy} onClick={() => retry(open)}>
-                {busy ? "⏳ Đang thử lại…" : "↻ Thử lại kết nối"}</button>
+              {canRetry
+                ? <button className="primary" disabled={busy} onClick={() => retry(open)}>
+                    {busy ? "⏳ Đang thử lại…" : "↻ Thử lại kết nối"}</button>
+                : <button className="primary" onClick={() => setOpen(null)}>Đóng</button>}
             </div>
           </div>
         </div>

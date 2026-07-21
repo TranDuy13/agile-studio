@@ -116,6 +116,7 @@ export default function AccountBadge({ event }) {
           <button className="acct-icon" onClick={() => setAdding(true)} title="Thêm account (đăng nhập)">+</button>
         </div>
       </div>
+      <div className="acct-list thin-scroll">
       {data.accounts.map((a) => {
         const pct = a.usage?.fiveHourPct;
         const on = a.id === data.active;
@@ -155,6 +156,7 @@ export default function AccountBadge({ event }) {
           </div>
         );
       })}
+      </div>
       {event?.kind === "switched" && (
         <div className="acct-toast">↻ Tự đổi sang {event.label}</div>
       )}
