@@ -43,7 +43,7 @@ export default function AccountBadge({ event }) {
 
   // Chỉ nạp DANH SÁCH account (không gọi API usage). Giữ lại % usage đã fetch trước đó.
   const load = useCallback(() => {
-    fetch("/api/accounts").then((r) => r.json()).then((d) =>
+    return fetch("/api/accounts").then((r) => r.json()).then((d) =>
       setData((prev) => ({ ...d, accounts: d.accounts.map((a) => ({
         ...a, usage: a.usage ?? prev.accounts.find((p) => p.id === a.id)?.usage ?? null,
       })) }))).catch(() => {});
@@ -56,13 +56,20 @@ export default function AccountBadge({ event }) {
     try { const d = await fetch("/api/accounts?usage=1").then((r) => r.json()); setData(d); }
     finally { setBusy(null); }
   }, []);
-  const refreshOne = async (id) => {
+  const refreshOne = useCallback(async (id) => {
     setBusy(id); lastRefresh.current = Date.now();
     try {
       const r = await fetch(`/api/accounts/${id}/usage`).then((x) => x.json());
       setData((d) => ({ ...d, accounts: d.accounts.map((a) => (a.id === id ? { ...a, usage: r.usage } : a)) }));
     } finally { setBusy(null); }
-  };
+  }, []);
+
+  // Vừa thêm / đăng nhập lại 1 account: nạp danh sách RỒI lấy usage của chính account đó,
+  // nếu không nó sẽ nằm im ở "—" cho tới lần refresh thủ công kế tiếp.
+  const afterLogin = useCallback(async (id) => {
+    await load();
+    if (id) await refreshOne(id); else await refreshAll();
+  }, [load, refreshOne, refreshAll]);
 
   // F5/mount: kiểm tra usage NGAY khi tải trang (reload phải tự check limit).
   useEffect(() => { refreshAll(); }, [refreshAll]);
@@ -154,8 +161,8 @@ export default function AccountBadge({ event }) {
       {event?.kind === "exhausted" && (
         <div className="acct-toast warn">⚠ Các account gần cạn quota</div>
       )}
-      <AccountLogin open={adding} onClose={() => setAdding(false)} onDone={load} />
-      <AccountLogin open={!!relogin} relogin={relogin} onClose={() => setRelogin(null)} onDone={load} />
+      <AccountLogin open={adding} onClose={() => setAdding(false)} onDone={afterLogin} />
+      <AccountLogin open={!!relogin} relogin={relogin} onClose={() => setRelogin(null)} onDone={afterLogin} />
       <UsageModal open={!!viewing} account={viewing} onClose={() => setViewing(null)} />
     </div>
   );
