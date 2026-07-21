@@ -1,6 +1,6 @@
 // JSON-file backend (default, zero-config): persists the whole snapshot to
 // <DATA_DIR>/studio.json. Kept for single-user local use with no DB to run.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, accessSync, constants } from "node:fs";
 import { join } from "node:path";
 import { config } from "../config.js";
 import { normalizeData } from "./state.js";
@@ -18,5 +18,7 @@ export function makeJsonBackend() {
   return {
     load() { return readStudioJson() || null; },
     save(data) { writeFileSync(FILE, JSON.stringify(data, null, 2)); },
+    // Liveness probe for /api/integrations: the data dir must still be writable.
+    ping() { accessSync(config.dataDir, constants.W_OK); },
   };
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import Canvas from "./Canvas.jsx";
 import Requirements from "./Requirements.jsx";
 import AccountBadge from "./AccountBadge.jsx";
+import IntegrationStatus from "./IntegrationStatus.jsx";
 import RunModal from "./RunModal.jsx";
 import SessionCard from "./SessionCard.jsx";
 import DocsPanel from "./DocsPanel.jsx";
@@ -36,6 +37,7 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [defaults, setDefaults] = useState({ model: "", economy: true, maxBudgetUsd: 0 });
   const [accountEvent, setAccountEvent] = useState(null);
+  const [integVersion, setIntegVersion] = useState(0); // bump khi trạng thái storage/bot đổi
 
   const loadProjects = useCallback(() => {
     fetch("/api/projects").then((r) => r.json()).then(setProjects);
@@ -120,6 +122,8 @@ export default function App() {
           setAccountEvent({ kind: "changed" }); setTimeout(() => setAccountEvent(null), 200); break;
         case "schedules:changed": case "schedule:fired":
           setSchedVersion((v) => v + 1); break;
+        case "integrations:changed":
+          setIntegVersion((v) => v + 1); break;
       }
     };
     return () => ws.close();
@@ -184,6 +188,7 @@ export default function App() {
           {!projects.length && <p className="empty">Chưa có project. Bấm + Project để thêm.</p>}
         </div>
         <AccountBadge event={accountEvent} />
+        <IntegrationStatus version={integVersion} />
       </aside>
 
       <main className="main">

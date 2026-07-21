@@ -15,12 +15,18 @@ export function makeSqliteBackend() {
   db.exec("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK (id = 1), doc TEXT)");
   const upsert = db.prepare("INSERT INTO state(id, doc) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc");
 
-  return {
+  const backend = {
+    seededFrom: null, // set when the first load migrated an existing studio.json
     load() {
       const row = db.prepare("SELECT doc FROM state WHERE id = 1").get();
       if (row) return JSON.parse(row.doc);
-      return readStudioJson(); // one-time migration from studio.json, or null when fresh
+      const migrated = readStudioJson(); // one-time migration from studio.json, or null when fresh
+      backend.seededFrom = migrated ? "studio.json" : null;
+      if (migrated) console.log(`storage sqlite: DB rỗng → nạp dữ liệu sẵn có từ studio.json (${path})`);
+      return migrated;
     },
     save(data) { upsert.run(JSON.stringify(data)); },
+    ping() { db.prepare("SELECT 1").get(); },
   };
+  return backend;
 }
