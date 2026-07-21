@@ -426,3 +426,20 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .scan-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .scan-path { grid-column:2; font-size:10px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .scan-result { font-size:11px; color:var(--done); background:rgba(53,208,127,0.1); border:1px solid rgba(53,208,127,0.3); border-radius:8px; padding:8px 10px; }
+
+/* ---- trạng thái kết nối storage / discord bot (issue 17) ---- */
+.integs { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; }
+.integ-row { display:flex; align-items:center; gap:6px; width:100%; text-align:left; background:none; border:1px solid transparent; border-radius:7px; padding:5px 6px; color:var(--ink); font-family:inherit; font-size:11px; cursor:pointer; }
+.integ-row:hover { background:var(--surface2); border-color:var(--line); }
+.integ-name { flex:0 0 auto; }
+.integ-sub { flex:1; min-width:0; text-align:right; color:var(--dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.integ-dot { flex:0 0 auto; width:8px; height:8px; border-radius:50%; background:var(--dim); }
+.integ-dot.d-ok { background:var(--done); }
+.integ-dot.d-warn { background:var(--running); }
+.integ-dot.d-err { background:var(--error); }
+.integ-dot.d-off { background:var(--dim); }
+.integ-state.d-ok { color:var(--done); }
+.integ-state.d-warn { color:var(--running); }
+.integ-state.d-err { color:var(--error); }
+.ghost-btn { background:var(--surface2); color:var(--muted); border:1px solid var(--line); border-radius:8px; padding:8px 14px; cursor:pointer; font-family:inherit; }
+.ghost-btn:hover { color:var(--ink); border-color:var(--accent); }

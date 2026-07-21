@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { existsSync, rmSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
-import { store, filesInStore } from "./store.js";
+import { store, filesInStore, storageStatus, retryStorage } from "./store.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
@@ -372,6 +372,78 @@ app.put("/api/settings", (req, res) => {
   if (req.body.switchThreshold !== undefined) patch.switchThreshold = Math.min(100, Math.max(1, Number(req.body.switchThreshold) || 90));
   if (typeof req.body.allowCommands === "boolean") patch.allowCommands = req.body.allowCommands;
   res.json(store.setSettings(patch));
+});
+
+// ---- Trạng thái tích hợp: storage + Discord bot (issue 17) ----
+// Storage tự biết trạng thái của nó (store/index.js). Bot chạy ở TIẾN TRÌNH RIÊNG
+// (`npm run bot`) nên nó tự báo về đây; im lặng quá BOT_STALE_MS = coi như không chạy.
+const BOT_STALE_MS = 45000;
+let botReport = null;
+
+app.post("/api/bot/status", (req, res) => {
+  const b = req.body || {};
+  const prev = botReport;
+  botReport = {
+    ok: !!b.ok, configured: !!b.configured,
+    error: b.error ? String(b.error).slice(0, 400) : null,
+    user: b.user || null, guilds: Number(b.guilds) || 0,
+    channelId: b.channelId || "", channelOk: b.channelOk == null ? null : !!b.channelOk,
+    prefix: b.prefix || "", wsConnected: !!b.wsConnected, pid: b.pid || null,
+    startedAt: b.startedAt || null, reportedAt: Date.now(),
+  };
+  const changed = !prev || prev.ok !== botReport.ok || prev.error !== botReport.error
+    || prev.user !== botReport.user || prev.channelOk !== botReport.channelOk;
+  if (changed) broadcast({ type: "integrations:changed" });
+  res.json({ ok: true });
+});
+
+// Quy đổi báo cáo của bot thành trạng thái + LÝ DO đọc được trên UI.
+function botView() {
+  const base = { name: "Discord bot", ...(botReport || {}) };
+  if (!botReport)
+    return { ...base, state: "down", reason: "Chưa nhận được báo cáo nào từ bot — nhiều khả năng tiến trình bot chưa chạy (`npm run dev` hoặc `npm run bot`).", hint: "start" };
+  const age = Date.now() - botReport.reportedAt;
+  if (age > BOT_STALE_MS)
+    return { ...base, state: "down", reason: `Bot ngừng báo trạng thái ${Math.round(age / 1000)}s trước — tiến trình có thể đã tắt hoặc treo.`, hint: "start" };
+  if (!botReport.configured)
+    return { ...base, state: "off", reason: "Bot đang chạy nhưng chưa có DISCORD_TOKEN trong .env — không kết nối Discord.", hint: "env" };
+  if (!botReport.ok)
+    return { ...base, state: "error", reason: botReport.error || "Bot chưa đăng nhập được vào Discord.", hint: "retry" };
+  if (botReport.channelOk === false)
+    return { ...base, state: "warn", reason: `Đã đăng nhập Discord nhưng không đọc được channel ${botReport.channelId || "(chưa đặt DISCORD_CHANNEL)"} — kiểm tra id channel và quyền của bot.`, hint: "env" };
+  return { ...base, state: "ok", reason: "" };
+}
+
+function storageView(st) {
+  if (st.connected) {
+    return { ...st, name: "Storage", state: "ok",
+      reason: st.seededFrom ? `DB rỗng lúc khởi động → đã nạp dữ liệu sẵn có từ ${st.seededFrom}.` : "" };
+  }
+  return { ...st, name: "Storage", state: "error", hint: "retry",
+    reason: (st.error || "Không kết nối được.")
+      + (st.degraded ? " — app đang chạy bằng bộ nhớ, MỌI THAY ĐỔI SẼ MẤT khi tắt server. Kết nối lại sẽ lấy dữ liệu trên DB làm chuẩn." : "") };
+}
+
+app.get("/api/integrations", async (req, res) => {
+  const st = await storageStatus({ probe: req.query.probe === "1" });
+  res.json({ storage: storageView(st), bot: botView() });
+});
+
+app.post("/api/integrations/storage/retry", async (req, res) => {
+  const st = await retryStorage();
+  broadcast({ type: "integrations:changed" });
+  res.json({ ok: st.connected, storage: storageView(st) });
+});
+
+// Bot ở tiến trình khác: gửi yêu cầu qua WS (bot luôn giữ 1 kết nối WS tới server).
+app.post("/api/integrations/bot/retry", (req, res) => {
+  const v = botView();
+  if (v.state === "down")
+    return res.status(409).json({ ok: false, error: "Không liên lạc được với tiến trình bot — khởi động lại bằng `npm run bot`.", bot: v });
+  if (v.state === "off") // thiếu token: thử lại vô ích, phải sửa .env rồi chạy lại bot
+    return res.status(409).json({ ok: false, error: "Chưa có DISCORD_TOKEN trong `.env` — thêm token rồi chạy lại `npm run bot`.", bot: v });
+  broadcast({ type: "bot:retry" });
+  res.json({ ok: true, note: "Đã yêu cầu bot kết nối lại — đợi vài giây rồi xem lại trạng thái.", bot: v });
 });
 
 // Thông báo Slack + Discord (webhook). Desktop notification xử lý ở frontend. Bot Discord xử lý riêng.

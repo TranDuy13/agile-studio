@@ -57,14 +57,22 @@ export async function makePostgresBackend() {
 
   let lastFlushed = null; // snapshot of what this process last wrote, for the diff
 
-  return {
+  const backend = {
     concurrent: true, // tells the store layer to also poll for other machines' changes
+    seededFrom: null, // set when the first load migrated an existing studio.json
     async load() {
       const { rows } = await pool.query("SELECT doc FROM agile_state WHERE id = 1");
-      const doc = rows.length ? rows[0].doc : readStudioJson(); // JSONB parsed already; else migrate
+      let doc = rows.length ? rows[0].doc : null; // JSONB parsed already
+      if (!doc) {
+        doc = readStudioJson(); // fresh DB: seed it from this machine's studio.json if there is one
+        backend.seededFrom = doc ? "studio.json" : null;
+        if (doc) console.log("storage postgres: bảng agile_state rỗng → nạp dữ liệu sẵn có từ studio.json");
+      }
       lastFlushed = doc ? clone(doc) : null;
       return doc;
     },
+    // Liveness probe for /api/integrations (cheap, no lock).
+    async ping() { await pool.query("SELECT 1"); },
     // Locked read-modify-write; returns the merged document to adopt.
     async save(cur) {
       const client = await pool.connect();
@@ -87,4 +95,5 @@ export async function makePostgresBackend() {
       }
     },
   };
+  return backend;
 }

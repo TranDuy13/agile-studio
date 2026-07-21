@@ -193,11 +193,45 @@ setInterval(async () => { // gộp log mỗi ~2.5s -> gửi vào thread (đỡ s
   }
 }, 2500);
 
+// ---- Báo trạng thái về server để UI hiện được "bot có kết nối không" (issue 17) ----
+// Bot là tiến trình riêng nên server không tự biết; ở đây tự khai báo + heartbeat.
+const STARTED_AT = Date.now();
+let wsConnected = false;
+let lastError = TOKEN ? null : "Chưa cấu hình DISCORD_TOKEN (.env)";
+
+async function checkChannel() {
+  if (!CHANNEL) return false;
+  return !!(await channel());
+}
+async function report(extra = {}) {
+  const ready = !!client?.user;
+  const body = {
+    ok: ready && !lastError, configured: !!TOKEN, error: lastError,
+    user: client?.user?.tag || null, guilds: client?.guilds?.cache?.size || 0,
+    channelId: CHANNEL, channelOk: ready ? await checkChannel() : null,
+    prefix: PREFIX, wsConnected, pid: process.pid, startedAt: STARTED_AT, ...extra,
+  };
+  try { await fetch(API + "/api/bot/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  catch { /* server chưa lên / đang restart — heartbeat sau sẽ bù */ }
+}
+setInterval(() => report(), 15000);
+
+// Người dùng bấm "Thử lại" trên UI -> server phát bot:retry -> đăng nhập lại (hoặc kiểm tra lại).
+async function retryLogin() {
+  if (!TOKEN) { lastError = "Chưa cấu hình DISCORD_TOKEN (.env)"; return report(); }
+  if (client.user) { lastError = null; return report(); } // đã online: chỉ kiểm tra lại channel
+  try { await client.login(TOKEN); lastError = null; }
+  catch (e) { lastError = "Đăng nhập Discord lỗi: " + e.message; }
+  report();
+}
+
 // ---- WebSocket notifications ----
 function connectWS() {
   const ws = new WebSocket(API.replace(/^http/, "ws"));
+  ws.on("open", () => { wsConnected = true; report(); });
   ws.on("message", async (buf) => {
     let e; try { e = JSON.parse(buf.toString()); } catch { return; }
+    if (e.type === "bot:retry") { retryLogin(); return; }
     if (e.type === "session:init" && e.data) {
       const prev = sess.get(e.data.id) || {};
       const info = { feature: e.data.feature, streamLog: e.data.streamLog, threadId: e.data.threadId || prev.threadId };
@@ -215,7 +249,7 @@ function connectWS() {
       post(`${ping}✖ **LỖI**: ${feat}${e.message ? " — " + e.message.slice(0, 200) : ""}`, s ? { components: controlRow(s) } : {}); }
     else if (e.type === "account:exhausted") post(`${ping}⚠ Hết quota các account (session \`${e.session || "-"}\`)`);
   });
-  ws.on("close", () => setTimeout(connectWS, 3000));
+  ws.on("close", () => { wsConnected = false; setTimeout(connectWS, 3000); });
   ws.on("error", () => {});
 }
 
@@ -239,9 +273,11 @@ function helpEmbed() {
 
 let readyDone = false;
 const onReady = async () => { if (readyDone) return; readyDone = true;
-  console.log("Bot online:", client.user.tag); connectWS();
+  console.log("Bot online:", client.user.tag);
+  lastError = null;
   try { for (const g of client.guilds.cache.values()) await g.commands.set(SLASH); console.log("Đã đăng ký slash commands ✓"); }
   catch (e) { console.error("Đăng ký slash lỗi:", e.message); }
+  report();
   post("🤖 Agile Studio bot online. Gõ `" + PREFIX + "help` hoặc `/`."); };
 client.once("clientReady", onReady);
 client.once("ready", onReady);
@@ -470,7 +506,14 @@ client.on("messageCreate", async (msg) => {
   } catch (e) { reply("Lỗi gọi API tool: " + String(e.message)); }
 });
 
+// WS mở NGAY từ đầu (không đợi Discord ready): nhờ vậy UI vẫn báo được trạng thái và
+// gửi được yêu cầu "Thử lại" kể cả khi bot chưa đăng nhập được Discord.
+connectWS();
+report();
+
 if (TOKEN) client.login(TOKEN).catch((e) => {
+  lastError = "Đăng nhập Discord lỗi: " + e.message;
   console.error("⚠ Bot login lỗi:", e.message, "— bot idle (server/web vẫn chạy).");
+  report();
   setInterval(() => {}, 1 << 30);
 });
