@@ -427,6 +427,30 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .scan-path { grid-column:2; font-size:10px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .scan-result { font-size:11px; color:var(--done); background:rgba(53,208,127,0.1); border:1px solid rgba(53,208,127,0.3); border-radius:8px; padding:8px 10px; }
 
+/* ---- dialog usage: mục + phân bổ quota cục bộ (issue 18) ---- */
+.usage-modal { max-height:88vh; overflow:auto; }
+.modal-head-btns { display:flex; align-items:center; gap:8px; }
+.modal-head-btns .acct-icon { font-size:13px; }
+.usage-sec-title { font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); margin-top:2px; }
+.usage-link { font-size:11px; color:var(--accent); text-decoration:none; }
+.usage-link:hover { text-decoration:underline; }
+.attr { display:flex; flex-direction:column; gap:9px; }
+.attr-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.attr-toggle { display:inline-flex; background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:2px; gap:2px; }
+.attr-toggle button { background:none; border:none; color:var(--muted); font-family:inherit; font-size:11px; padding:4px 10px; border-radius:6px; cursor:pointer; }
+.attr-toggle button.on { background:var(--surface); color:var(--ink); box-shadow:0 1px 4px rgba(0,0,0,0.3); }
+.attr-total { font-size:11px; color:var(--muted); }
+.attr-note { font-size:10px; color:var(--dim); line-height:1.5; }
+.attr-block-title { font-size:11px; color:var(--muted); margin-top:2px; }
+.attr-rows { display:flex; flex-direction:column; gap:9px; }
+.attr-row .usage-bar { height:6px; }
+.attr-fill { background:var(--accent); }
+.attr-top { display:flex; justify-content:space-between; gap:10px; font-size:11px; margin-bottom:4px; }
+.attr-key { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.attr-val { flex:0 0 auto; color:var(--muted); }
+.attr-sub { font-size:10px; color:var(--dim); margin-top:3px; }
+.attr-empty { font-size:11px; color:var(--dim); background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+
 /* ---- trạng thái kết nối storage / discord bot (issue 17) ---- */
 .integs { border-top:1px solid var(--line); padding-top:12px; margin-top:12px; }
 .integ-row { display:flex; align-items:center; gap:6px; width:100%; text-align:left; background:none; border:1px solid transparent; border-radius:7px; padding:5px 6px; color:var(--ink); font-family:inherit; font-size:11px; cursor:pointer; }

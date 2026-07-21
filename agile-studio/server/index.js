@@ -10,7 +10,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 const pexecFile = promisify(execFile);
-import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn, emailFor, defaultConfigDir, clearProfileCache } from "./accounts.js";
+import { loadAccounts, pickAccount, fetchModels, fetchUsage, fetchProfile, addAccount, removeAccount, setAccountEnabled, enabledAccounts, newAccountConfigDir, isLoggedIn, emailFor, defaultConfigDir, clearProfileCache, authMethodFor } from "./accounts.js";
 import { runClaude, runClaudeStream, copySessionTranscript, killChild, ROLE_ORDER, ROLE_META } from "./runner.js";
 import { claudeSpawn } from "./claudeBin.js";
 import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOutputs,
@@ -348,8 +348,44 @@ app.patch("/api/accounts/:id", (req, res) => {
 app.get("/api/accounts/:id/usage", async (req, res) => {
   const acc = loadAccounts().find((a) => a.id === req.params.id);
   if (!acc) return res.status(404).json({ error: "Không thấy account" });
-  const [usage, profile] = await Promise.all([fetchUsage(acc.configDir), fetchProfile(acc.configDir)]);
-  res.json({ id: acc.id, usage, profile, configDir: acc.configDir });
+  const [usage, profile, authMethod] = await Promise.all([
+    fetchUsage(acc.configDir), fetchProfile(acc.configDir), authMethodFor(acc.configDir)]);
+  res.json({ id: acc.id, usage, profile, authMethod, configDir: acc.configDir });
+});
+
+// "Điều gì đang chiếm quota?" — quy đổi từ các session đã chạy TRÊN MÁY NÀY (issue 18).
+// Anthropic không trả về phân bổ theo model/project, nên đây là ƯỚC LƯỢNG cục bộ:
+// token cộng dồn của mỗi session + phần trăm cửa sổ 5h mà session đó tiêu (delta đầu/cuối job).
+app.get("/api/accounts/:id/attribution", (req, res) => {
+  const id = req.params.id;
+  const week = req.query.window === "week";
+  const since = Date.now() - (week ? 7 * 864e5 : 864e5);
+  const rows = store.listSessions().filter((s) =>
+    (s.updatedAt || s.startedAt || 0) >= since && (s.usageAccount || s.activeAccount) === id);
+
+  const pctOf = (s) => (s.fivePctStart != null && s.fivePctEnd != null ? Math.max(0, s.fivePctEnd - s.fivePctStart) : 0);
+  const group = (keyOf) => {
+    const m = new Map();
+    for (const s of rows) {
+      const key = keyOf(s) || "—";
+      const e = m.get(key) || { key, tokens: 0, cost: 0, fivePct: 0, sessions: 0 };
+      e.tokens += s.tokens || 0; e.cost += s.cost || 0; e.fivePct += pctOf(s); e.sessions++;
+      m.set(key, e);
+    }
+    return [...m.values()].sort((a, b) => b.tokens - a.tokens).slice(0, 6);
+  };
+
+  res.json({
+    window: week ? "week" : "day", since,
+    totals: {
+      sessions: rows.length,
+      tokens: rows.reduce((n, s) => n + (s.tokens || 0), 0),
+      cost: rows.reduce((n, s) => n + (s.cost || 0), 0),
+      fivePct: rows.reduce((n, s) => n + pctOf(s), 0),
+    },
+    byModel: group((s) => s.model || "mặc định (theo account)"),
+    byProject: group((s) => s.projectName || (s.projectId ? `project #${s.projectId}` : "—")),
+  });
 });
 
 // Model đang active thật của Claude (map động, không hard-code).

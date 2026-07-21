@@ -106,6 +106,19 @@ export async function isLoggedIn(configDir) {
   return !!(await readToken(configDir));
 }
 
+// Phương thức xác thực của account (dialog usage hiện "Auth method" như tab Usage của Claude):
+//   claudeai      - đăng nhập tài khoản Claude (OAuth) — cách app này dùng
+//   apikey-helper - configDir có settings.json khai báo apiKeyHelper
+//   apikey        - có ANTHROPIC_API_KEY trong môi trường server
+export async function authMethodFor(configDir) {
+  if (await readToken(configDir)) return "claudeai";
+  try {
+    const s = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
+    if (s.apiKeyHelper) return "apikey-helper";
+  } catch { /* không có settings.json cũng bình thường */ }
+  return process.env.ANTHROPIC_API_KEY ? "apikey" : null;
+}
+
 // Thông tin account claude THẬT (email/tên/plan/org) qua /api/oauth/profile.
 export async function fetchProfile(configDir) {
   const token = await readToken(configDir);
