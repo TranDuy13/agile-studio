@@ -16,6 +16,7 @@ import { claudeSpawn } from "./claudeBin.js";
 import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOutputs,
   saveSkill, listDocs, readDoc, writeDoc } from "./scaffold.js";
 import { materializeDocs, syncDocsBack, saveUpload, materializeUpload, removeUpload } from "./workspace.js";
+import { registerDocRoutes } from "./routes/docgen.js";
 
 const app = express();
 app.use(cors());
@@ -31,6 +32,7 @@ function broadcast(msg) {
   const s = JSON.stringify(msg);
   for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(s);
 }
+registerDocRoutes(app, broadcast);
 
 // Nhiều session chạy SONG SONG (như nhiều tab Claude Code). Mỗi session có state riêng.
 const sessions = new Map(); // sessionId -> session
