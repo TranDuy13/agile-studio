@@ -23,7 +23,7 @@ const KINDS = [
   { id: "tutorial", label: "tutorial — dắt đi một lượt" },
 ];
 
-const levelOf = (num) => Math.min(3, String(num).split(".").length + 1); // doc row is level 1
+const levelOf = (num) => Math.min(4, String(num).split(".").length + 1); // doc row is level 1
 const hhmm = (t) => new Date(t).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit",
   day: "2-digit", month: "2-digit" });
 
@@ -109,6 +109,10 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
     }
   });
 
+  // Outline depth is a per-document choice: an SRS may want three levels while a five-section
+  // Repository Structure never will. It only caps how deep the agent may split.
+  const setDepth = (docKey, maxDepth) => mutateDoc(docKey, (doc) => { doc.maxDepth = maxDepth; });
+
   const renameSection = (docKey, id, title) =>
     mutateDoc(docKey, (doc) => {
       const s = doc.sections.find((x) => x.id === id);
@@ -122,8 +126,14 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
     mutateDoc(docKey, (doc) => {
       const at = doc.sections.findIndex((s) => s.id === afterId);
       const parent = at >= 0 ? doc.sections[at] : null;
-      // Insert under the section it follows so the numbering stays inside the standard's scheme.
-      const base = parent ? String(parent.num).split(".")[0] : String(doc.sections.length + 1);
+      // Numbering stays inside the standard's scheme and inside this document's depth limit:
+      // below the limit the new section nests under the one it follows, at the limit it becomes
+      // its sibling instead of growing another level.
+      const maxDepth = doc.maxDepth || 2;
+      const parts = parent ? String(parent.num).split(".") : [];
+      const base = !parent ? String(doc.sections.length + 1)
+        : parts.length < maxDepth ? parts.join(".")
+        : parts.slice(0, maxDepth - 1).join(".");
       let num = parent ? `${base}.1` : base;
       for (let i = 1; doc.sections.some((s) => String(s.num) === num); i++) num = `${base}.${i}`;
       doc.sections.splice(at >= 0 ? at + 1 : doc.sections.length, 0, {
@@ -315,7 +325,17 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
               <React.Fragment key={doc.key}>
                 <div className="dg-tr l1">
                   <span className="nm">📘 {doc.file}</span>
-                  <span className="src">{doc.sections.filter((s) => s.enabled !== false).length}/{doc.sections.length} mục</span>
+                  <span className="src">
+                    <label className="dg-depth" title="Số cấp số mục tối đa cho tài liệu này — agent chỉ được tách sâu tới mức này">
+                      độ sâu
+                      <select className="dg-inp" value={doc.maxDepth || 2} disabled={locked}
+                        onChange={(e) => setDepth(doc.key, Number(e.target.value))}>
+                        <option value={2}>2 cấp</option>
+                        <option value={3}>3 cấp</option>
+                      </select>
+                    </label>
+                    <em className="none">{doc.sections.filter((s) => s.enabled !== false).length}/{doc.sections.length} mục</em>
+                  </span>
                 </div>
                 {doc.sections.map((s, i) => (
                   <div key={s.id}

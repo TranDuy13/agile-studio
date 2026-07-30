@@ -50,6 +50,11 @@ export function buildSurveyPrompt({ job, std, outFile, extraSources = [], revise
     .concat(extraSources.map((e) => `- ${e.kind === "reference" ? "Tài liệu tham chiếu" : "Mã nguồn cùng sản phẩm"}: ${e.path}`))
     .join("\n");
 
+  // Outline depth is per document: some documents genuinely need a third level, most do not.
+  const depthLines = (plan?.docs || []).length
+    ? (plan.docs.map((d) => `  - ${d.key}: tối đa ${d.maxDepth || 2} cấp số mục`).join("\n"))
+    : `  - mọi tài liệu: tối đa ${job.style?.outlineDepth || 2} cấp số mục`;
+
   const reviseBlock = revise
     ? `\nDÀN Ý HIỆN TẠI (JSON) — hãy sửa theo yêu cầu của người dùng, giữ nguyên phần không liên quan:\n`
       + "```json\n" + JSON.stringify(compactPlan(plan), null, 1) + "\n```\n"
@@ -65,6 +70,10 @@ ${sources}
 
 BỘ TÀI LIỆU CỦA CHUẨN (không đổi tên mục, không dịch tên mục):
 ${sectionLines(std)}
+
+ĐỘ SÂU DÀN Ý CHO PHÉP (đừng tách sâu hơn mức này):
+${depthLines}
+  · 2 cấp = được tạo "6.1"; 3 cấp = được tạo thêm "6.1.1" bằng cách lồng "subsections" trong "subsections".
 ${reviseBlock}
 VIỆC CẦN LÀM
 1. Đọc mã nguồn ở mức đủ để biết hệ thống làm gì: cấu trúc thư mục, phụ thuộc, cấu hình,

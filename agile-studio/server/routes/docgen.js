@@ -199,6 +199,7 @@ export function registerDocRoutes(app, broadcast = () => {}) {
         // templatePath set here wins; the global default in agent-settings is only a fallback.
         templateId: b.style?.templateId || null, templatePath: b.style?.templatePath || "",
         tone: b.style?.tone || "concise",
+        outlineDepth: Math.min(3, Math.max(2, Number(b.style?.outlineDepth) || 2)),
         language: b.style?.language || "vi-keep-en", depth: b.style?.depth || "standard",
       },
       run: { engine: "per-doc" },
@@ -358,7 +359,7 @@ export function registerDocRoutes(app, broadcast = () => {}) {
     if (cur?.approvedAt) return bad(res, 409, "Dàn ý đã đóng băng");
     // No survey yet: build the plain outline of the standard first, so a preset is a way to get
     // a usable outline without spending a token.
-    const base = cur || buildPlan({ std: standardFor(job), projectName: job.projectName, survey: null });
+    const base = cur || buildPlan({ std: standardFor(job), projectName: job.projectName, survey: null, outlineDepth: job.style?.outlineDepth });
     const plan = docgenStore.putPlan(job.id, applyPreset(base, preset));
     if (job.status === "draft") emit(docgenStore.patchJob(job.id, { status: "plan-review" }));
     res.json({ plan, stats: planStats(plan, job.style?.depth) });
@@ -434,7 +435,7 @@ export function registerDocRoutes(app, broadcast = () => {}) {
       },
     }).then(({ survey, exitError }) => {
       running.delete(job.id);
-      const built = buildPlan({ std, projectName: job.projectName, survey });
+      const built = buildPlan({ std, projectName: job.projectName, survey, outlineDepth: job.style?.outlineDepth });
       const merged = revise && plan ? mergeRevision(plan, built) : built;
       docgenStore.putPlan(job.id, merged);
       const stats = planStats(merged, job.style?.depth);

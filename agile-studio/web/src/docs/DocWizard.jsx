@@ -37,7 +37,7 @@ export default function DocWizard({ project, standards, composable, tones, setti
   const [picks, setPicks] = useState([]);
   const [control, setControl] = useState(CONTROL_ROWS.map((r) => ({ ...r, enabled: r.on, source: "added" })));
   const [history, setHistory] = useState([{ date: today(), version: "1.0", change: "Khởi tạo", by: "", byAuto: true }]);
-  const [style, setStyle] = useState({ tone: "concise", language: "vi-keep-en", depth: "detailed", templatePath: "" });
+  const [style, setStyle] = useState({ tone: "concise", language: "vi-keep-en", depth: "detailed", outlineDepth: 2, templatePath: "" });
   const [docIdPrefix, setDocIdPrefix] = useState("");
   const [classification, setClassification] = useState("Nội bộ");
   const [est, setEst] = useState(null);
@@ -526,7 +526,8 @@ export default function DocWizard({ project, standards, composable, tones, setti
                   title={t.label} sub={t.blurb} />
               ))}
             </div>
-            {tone && <ToneSample tone={tone} />}
+            {tone && <ToneSample tone={tone} tones={tones || []}
+              onPick={(id) => setStyle((s) => ({ ...s, tone: id }))} />}
           </div>
 
           <div className="dg-row">
@@ -539,12 +540,22 @@ export default function DocWizard({ project, standards, composable, tones, setti
               </select>
             </div>
             <div className="dg-field">
-              <span className="dg-label">Độ sâu</span>
+              <span className="dg-label">Độ chi tiết nội dung</span>
               <select className="dg-inp" value={style.depth} onChange={(e) => setStyle((s) => ({ ...s, depth: e.target.value }))}>
                 {DEPTHS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
               </select>
             </div>
+            <div className="dg-field">
+              <span className="dg-label">Số cấp mục của dàn ý</span>
+              <select className="dg-inp" value={style.outlineDepth}
+                onChange={(e) => setStyle((s) => ({ ...s, outlineDepth: Number(e.target.value) }))}>
+                <option value={2}>2 cấp — 6 → 6.1 (mặc định)</option>
+                <option value={3}>3 cấp — 6 → 6.1 → 6.1.1</option>
+              </select>
+            </div>
           </div>
+          <p className="dg-note">Số cấp là mức tối đa agent được tách. Sau khi có dàn ý, đổi riêng cho
+            từng tài liệu ngay trên màn duyệt.</p>
 
           <div className="dg-row">
             <button className="ghost" onClick={() => setStep(2)}>Quay lại</button>
@@ -612,15 +623,39 @@ function StandardOption({ on, onClick, title, sub, hint, files }) {
   );
 }
 
+// Four tones side by side on the same paragraph — for picking fast once you know what the
+// three-kind preview is teaching.
+function ToneCompare({ tones, current, onPick }) {
+  return (
+    <div className="dg-tone-cmp">
+      {tones.map((t) => (
+        <button key={t.id} className={"dg-tone-col" + (t.id === current ? " on" : "")}
+          onClick={() => onPick(t.id)}>
+          <span className="dg-tone-col-h">
+            <i className="bx radio">{t.id === current ? "●" : ""}</i>
+            <b>{t.label}</b>
+          </span>
+          {t.samples.explanation.slice(0, 2).map((p, i) => <p key={i}>{p}</p>)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Tone preview. Shows the same three kinds of section every time, because the point is that a
 // tone only moves `explanation`: reference stays terse, howto stays numbered (RULESET N6).
-function ToneSample({ tone }) {
+function ToneSample({ tone, tones, onPick }) {
+  const [compare, setCompare] = useState(false);
   return (
     <div className="dg-card dg-tone">
       <div className="dg-tone-h">
         <span className="dg-label">Xem trước văn phong “{tone.label}”</span>
         <span className="pill acc">chi phối mục explanation</span>
+        <button className="mini" onClick={() => setCompare((v) => !v)}>
+          {compare ? "✕ Đóng so sánh" : "⚖ So sánh cả 4 văn phong"}
+        </button>
       </div>
+      {compare && <ToneCompare tones={tones} current={tone.id} onPick={onPick} />}
       <div className="dg-tone-block">
         <div className="dg-tone-k">
           <abbr className="tt" title="Giải thích: vì sao lại thế — dành cho người muốn hiểu bối cảnh">explanation</abbr>

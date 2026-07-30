@@ -36,7 +36,8 @@ function baseSection(docKey, s, extra = {}) {
 
 // survey may be null: the outline is then the plain standard, which is what "Áp preset" and a
 // failed survey both fall back to.
-export function buildPlan({ std, projectName, survey }) {
+export function buildPlan({ std, projectName, survey, outlineDepth = 2 }) {
+  const maxDepth = Math.min(3, Math.max(2, Number(outlineDepth) || 2));
   const byDoc = new Map((survey?.docs || []).map((d) => [d.key, d]));
   const docs = std.docs.map((doc) => {
     const found = byDoc.get(doc.key);
@@ -53,18 +54,25 @@ export function buildPlan({ std, projectName, survey }) {
         proposedDrop: !!hit && hit.keep === false,
       }));
       // Sub-sections follow their parent in numeric order, whatever order the agent listed them in.
-      const subs = [...(hit?.subsections || [])].sort((a, b) => cmpNum(a?.num, b?.num));
-      for (const sub of subs) {
-        if (!sub?.num || !sub?.title) continue;
-        sections.push(baseSection(doc.key, { ...s, num: String(sub.num), title: String(sub.title) }, {
-          required: false, origin: "agent",
-          sources: Array.isArray(sub.sources) ? sub.sources.slice(0, 24) : [],
-          hint: s.hint,
-        }));
-      }
+      // Nesting stops at `maxDepth` levels of numbering (2 by default): deeper outlines mean Word
+      // heading levels nobody reads, so a third level is opt-in per document.
+      const pushSubs = (list, parent, level) => {
+        if (level > maxDepth) return;
+        for (const sub of [...(list || [])].sort((a, b) => cmpNum(a?.num, b?.num))) {
+          if (!sub?.num || !sub?.title) continue;
+          sections.push(baseSection(doc.key, { ...parent, num: String(sub.num), title: String(sub.title) }, {
+            required: false, origin: "agent",
+            sources: Array.isArray(sub.sources) ? sub.sources.slice(0, 24) : [],
+            hint: parent.hint,
+          }));
+          pushSubs(sub.subsections, parent, level + 1);
+        }
+      };
+      pushSubs(hit?.subsections, s, 2);
     }
     return { key: doc.key, title: doc.title, short: doc.short || doc.title,
-      hint: doc.hint || "", file: fileNameOf(projectName, doc), enabled: true, sections };
+      hint: doc.hint || "", file: fileNameOf(projectName, doc), enabled: true,
+      maxDepth, sections };
   });
 
   for (const add of survey?.added || []) {
