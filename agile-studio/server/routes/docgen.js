@@ -1,6 +1,8 @@
 // Every docgen HTTP route lives here. Registered from index.js with two lines, so the rest of
 // the server is untouched by this feature.
 import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { store } from "../store.js";
 import { docgenStore } from "../store/docgen.js";
 import { enabledAccounts, fetchUsage } from "../accounts.js";
@@ -11,6 +13,9 @@ import { runSurvey } from "../docgen/survey.js";
 import { buildPlan, mergeRevision, planToPreset, applyPreset, planStats } from "../docgen/plan.js";
 import { estimateSurvey, estimateRevise, estimatePlan, windowsOf } from "../docgen/estimate.js";
 import { gitAuthors, scanPreview } from "../docgen/gitscan.js";
+import { TONES } from "../docgen/tones.js";
+
+const pexecFile = promisify(execFile);
 
 // Surveys currently running, so they can be stopped and so a second start is refused.
 const running = new Map(); // jobId -> { child, startedAt }
@@ -23,6 +28,32 @@ function accountFor() {
   const list = enabledAccounts();
   const preferred = store.getSettings().preferredAccount;
   return list.find((a) => a.id === preferred) || list[0] || null;
+}
+
+// Native file dialog for picking a Word template, per platform. Returns null when cancelled.
+async function pickDocxNative() {
+  const title = "Chọn mẫu Word (.docx)";
+  if (process.platform === "win32") {
+    const ps = "Add-Type -AssemblyName System.Windows.Forms | Out-Null; "
+      + "$d = New-Object System.Windows.Forms.OpenFileDialog; "
+      + `$d.Title = "${title}"; $d.Filter = "Word document (*.docx)|*.docx"; `
+      + "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }";
+    const { stdout } = await pexecFile("powershell.exe", ["-NoProfile", "-STA", "-Command", ps], { windowsHide: true });
+    return stdout.trim() || null;
+  }
+  if (process.platform === "darwin") {
+    const script = `POSIX path of (choose file with prompt "${title}" of type {"docx"})`;
+    try { const { stdout } = await pexecFile("osascript", ["-e", script]); return stdout.trim() || null; }
+    catch { return null; } // cancel
+  }
+  for (const [cmd, args] of [
+    ["zenity", ["--file-selection", `--title=${title}`, "--file-filter=*.docx"]],
+    ["kdialog", ["--getopenfilename", ".", "*.docx"]],
+  ]) {
+    try { const { stdout } = await pexecFile(cmd, args); return stdout.trim() || null; }
+    catch (e) { if (e.code === "ENOENT") continue; return null; }
+  }
+  throw new Error("Không có hộp thoại chọn tệp (cài zenity/kdialog) — nhập đường dẫn thủ công.");
 }
 
 // A job either points at a declared standard, or carries the picks of a custom set.
@@ -44,7 +75,7 @@ export function registerDocRoutes(app, broadcast = () => {}) {
 
   // ---- standards & presets (studio-wide) ----
   app.get("/api/doc-standards", (req, res) =>
-    res.json({ standards: listStandards(), composable: listComposableDocs() }));
+    res.json({ standards: listStandards(), composable: listComposableDocs(), tones: TONES }));
 
   app.get("/api/doc-presets", (req, res) => res.json({ presets: docgenStore.listPresets() }));
   app.post("/api/doc-presets", (req, res) => {
@@ -61,16 +92,30 @@ export function registerDocRoutes(app, broadcast = () => {}) {
     res.json({ ok: true });
   });
 
-  // ---- docgen settings (token threshold + "đừng hỏi lại" theo loại việc) ----
-  app.get("/api/doc-settings", (req, res) => res.json(docgenStore.getSettings()));
-  app.put("/api/doc-settings", (req, res) => {
+  // ---- studio-wide agent settings ----
+  // The token threshold is NOT a docgen setting: it is the app-wide rule for "hỏi trước khi tiêu
+  // hơn N token", and any feature that spends tokens should gate itself with the same number.
+  // It lives in docgen.json only because D1 must not touch store.js; Cài đặt → Chung (D3) moves
+  // the control there, reading the same endpoint.
+  app.get("/api/agent-settings", (req, res) => res.json(docgenStore.getSettings()));
+  app.put("/api/agent-settings", (req, res) => {
     const patch = {};
     if (req.body.tokenThreshold !== undefined)
       patch.tokenThreshold = Math.max(0, Number(req.body.tokenThreshold) || 0);
     if (req.body.tokensPer5h !== undefined)
       patch.tokensPer5h = Math.max(1000, Number(req.body.tokensPer5h) || 2000000);
     if (req.body.dontAsk && typeof req.body.dontAsk === "object") patch.dontAsk = req.body.dontAsk;
+    // Global Word template: the fallback used by any document set that does not pick its own.
+    if (typeof req.body.defaultTemplatePath === "string")
+      patch.defaultTemplatePath = req.body.defaultTemplatePath.trim();
     res.json(docgenStore.setSettings(patch));
+  });
+
+  // Native "choose a .docx" dialog. The app already has a folder picker; a document set needs a
+  // file, and D1 must not add a route to index.js.
+  app.get("/api/doc-scan/pick-docx", async (req, res) => {
+    try { res.json({ path: await pickDocxNative() }); }
+    catch (e) { res.status(400).json({ error: String(e.message), manual: true }); }
   });
 
   // ---- scope helpers used by the wizard ----
@@ -110,12 +155,13 @@ export function registerDocRoutes(app, broadcast = () => {}) {
       projectId: p.id, projectName: p.name,
       name: b.name?.trim() || std.docs[0].title,
       standardId: std.id, customDocs: std.id === "custom" ? picks : undefined, status: "draft",
-      // The main source is the project repo and stays locked (Q6). Extra folders are only ever
-      // additions belonging to the same product.
+      // The main source is the project repo and stays locked (Q6). Anything else added here is a
+      // reference document, never another body of source code: the code being documented is this
+      // project's repo, by definition.
       sources: {
         main: { projectId: p.id, path: p.repo_path },
         extra: (b.sources?.extra || []).filter((e) => e?.path && existsSync(e.path))
-          .map((e, i) => ({ id: "x" + i, kind: e.kind === "reference" ? "reference" : "code", path: e.path })),
+          .map((e, i) => ({ id: "x" + i, kind: "reference", path: e.path })),
       },
       scope: {
         mode: b.scope?.mode === "feature" ? "feature" : "all",
@@ -131,7 +177,9 @@ export function registerDocRoutes(app, broadcast = () => {}) {
         history: Array.isArray(b.meta?.history) ? b.meta.history : [],
       },
       style: {
-        templateId: b.style?.templateId || null, tone: b.style?.tone || "concise",
+        // templatePath set here wins; the global default in agent-settings is only a fallback.
+        templateId: b.style?.templateId || null, templatePath: b.style?.templatePath || "",
+        tone: b.style?.tone || "concise",
         language: b.style?.language || "vi-keep-en", depth: b.style?.depth || "standard",
       },
       run: { engine: "per-doc" },
@@ -387,8 +435,13 @@ function withPlanSummary(job) {
         sections: d.sections.filter((s) => s.enabled !== false).length }))
     : (std?.docs || []).map((d) => ({ key: d.key, title: d.title,
         file: `${job.projectName} — ${d.short || d.title}.docx`, sections: d.sections.length }));
+  // Which Word template this set will actually use: its own beats the studio-wide default.
+  const gset = docgenStore.getSettings();
+  const own = job.style?.templatePath || "";
   return {
     ...job,
+    template: { path: own || gset.defaultTemplatePath || "",
+      source: own ? "set" : (gset.defaultTemplatePath ? "global" : "none") },
     standardLabel: std?.label || job.standardId,
     docCount: docs.length,
     sectionCount: docs.reduce((n, d) => n + d.sections, 0),

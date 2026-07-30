@@ -29,7 +29,8 @@ export function TokenChip({ tokens, threshold = 50000, free = false }) {
   return <span className={"tok" + (hot ? "" : " lo")}>⛽ ~{fmtTokens(tokens)}</span>;
 }
 
-export default function TokenConfirm({ open, kind, tokens, settings, account, usage, spent, onCancel, onConfirm }) {
+export default function TokenConfirm({ open, kind, tokens, settings, account, usage, spent,
+  onCancel, onConfirm, onSettings }) {
   const [dontAsk, setDontAsk] = useState(false);
   if (!open) return null;
   const per5h = Number(settings?.tokensPer5h) || 2000000;
@@ -56,9 +57,10 @@ export default function TokenConfirm({ open, kind, tokens, settings, account, us
           <i className="bx">{dontAsk ? "✓" : ""}</i>
           <span className="dg-chk-t">
             <b>Không hỏi lại cho loại việc này</b>
-            <span>Ngưỡng hỏi hiện tại: {fmtTokens(settings?.tokenThreshold ?? 50000)} token</span>
+            <span>Chỉ áp cho “{WORK_LABELS[kind] || "việc này"}”, không tắt cảnh báo của việc khác.</span>
           </span>
         </button>
+        {onSettings && <ThresholdField settings={settings} onChange={onSettings} />}
         <div className="dg-row" style={{ justifyContent: "flex-end" }}>
           <button className="ghost" onClick={onCancel}>Huỷ</button>
           <button className="primary" onClick={() => onConfirm(dontAsk)}>Chạy</button>
@@ -68,16 +70,18 @@ export default function TokenConfirm({ open, kind, tokens, settings, account, us
   );
 }
 
-// Threshold lives in docgen settings for now; the settings modal rework (Q14) moves the control
-// itself into Cài đặt → Chung.
+// The threshold is a studio-wide rule, not a docgen one: it applies to every action that spends
+// tokens. It is editable right here because this dialog is where people realise it is wrong —
+// too low and they are nagged, too high and money leaks. Cài đặt → Chung gets the same control
+// when the settings modal is rebuilt (Q14/D3); both read /api/agent-settings.
 export function ThresholdField({ settings, onChange }) {
   const v = Math.round((settings?.tokenThreshold ?? 50000) / 1000);
   return (
-    <span className="dg-sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      ⛽ ngưỡng hỏi
-      <input className="dg-inp num" style={{ width: 62, padding: "3px 7px" }} type="number" min="0" step="5"
+    <div className="dg-note" style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+      Ngưỡng hỏi <b style={{ color: "var(--ink)" }}>toàn cục</b>:
+      <input className="dg-inp num" style={{ width: 66, padding: "3px 7px" }} type="number" min="0" step="5"
         value={v} onChange={(e) => onChange({ tokenThreshold: Math.max(0, Number(e.target.value) || 0) * 1000 })} />
-      K token
-    </span>
+      K token — áp cho mọi việc tốn token của Studio, không riêng tài liệu.
+    </div>
   );
 }

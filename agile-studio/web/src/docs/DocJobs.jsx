@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import DocWizard from "./DocWizard.jsx";
 import DocOutline from "./DocOutline.jsx";
-import { ThresholdField, fmtTokens } from "./TokenConfirm.jsx";
+import { fmtTokens } from "./TokenConfirm.jsx";
 import "./docgen.css";
 
 // Tab "📚 Tài liệu" (MH 1). Every document set on this board belongs to the project that is open:
@@ -19,6 +19,7 @@ export default function DocJobs({ project }) {
   const [jobs, setJobs] = useState([]);
   const [standards, setStandards] = useState([]);
   const [composable, setComposable] = useState([]);
+  const [tones, setTones] = useState([]);
   const [settings, setSettings] = useState(null);
   const [view, setView] = useState({ name: "list" });
   const [storage, setStorage] = useState(null);
@@ -34,8 +35,9 @@ export default function DocJobs({ project }) {
   useEffect(loadJobs, [loadJobs]);
   useEffect(() => {
     fetch("/api/doc-standards").then((r) => r.json())
-      .then((d) => { setStandards(d.standards || []); setComposable(d.composable || []); }).catch(() => {});
-    fetch("/api/doc-settings").then((r) => r.json()).then(setSettings).catch(() => {});
+      .then((d) => { setStandards(d.standards || []); setComposable(d.composable || []); setTones(d.tones || []); })
+      .catch(() => {});
+    fetch("/api/agent-settings").then((r) => r.json()).then(setSettings).catch(() => {});
   }, []);
 
   // Own WebSocket connection: the docgen feature listens for its own events without adding a
@@ -57,7 +59,7 @@ export default function DocJobs({ project }) {
   }, [loadJobs]);
 
   const saveSettings = (patch) => {
-    fetch("/api/doc-settings", {
+    fetch("/api/agent-settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
     }).then((r) => r.json()).then(setSettings).catch(() => {});
   };
@@ -73,7 +75,7 @@ export default function DocJobs({ project }) {
   if (view.name === "wizard")
     return (
       <div className="dg">
-        <DocWizard project={project} standards={standards} composable={composable}
+        <DocWizard project={project} standards={standards} composable={composable} tones={tones}
           settings={settings} onSettings={saveSettings}
           onCancel={() => setView({ name: "list" })}
           onCreated={(job) => { loadJobs(); setView({ name: "outline", jobId: job.id }); }} />
@@ -94,7 +96,6 @@ export default function DocJobs({ project }) {
         <b className="dg-h1">📚 Tài liệu sản phẩm</b>
         <span className="dg-sub">theo chuẩn quốc tế · chỉ của project {project.name}</span>
         <span className="dg-spacer" />
-        {settings && <ThresholdField settings={settings} onChange={saveSettings} />}
         <button className="primary" onClick={() => setView({ name: "wizard" })}>＋ Bộ tài liệu mới</button>
       </div>
 

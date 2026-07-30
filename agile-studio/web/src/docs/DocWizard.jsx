@@ -4,25 +4,14 @@ import TokenConfirm, { TokenChip, shouldAsk } from "./TokenConfirm.jsx";
 // Wizard for a new document set (MH 2). Three steps: scope & sources, the standard, presentation.
 // Publishing is not here on purpose — content lives in Studio and is exported later (Q10).
 
-const TONES = [
-  { id: "concise", label: "Định danh · súc tích",
-    sample: "“ConnectionStrings:Main — chuỗi kết nối, khai báo trong appsettings.json.”" },
-  { id: "academic", label: "Hàn lâm",
-    sample: "“Tham số kết nối được định nghĩa theo mô hình cấu hình phân tầng, tách mã nguồn khỏi tham số môi trường.”" },
-  { id: "detailed", label: "Diễn giải chi tiết",
-    sample: "“Khoá này quyết định ứng dụng nối tới đâu. Khi đổi máy chủ, sửa giá trị rồi khởi động lại service…”" },
-  { id: "narrative", label: "Kể chuyện · dẫn dắt",
-    sample: "“Trước khi bàn tới chuyện kết nối, cần hiểu vì sao hệ thống tách cấu hình ra khỏi mã nguồn…”" },
-];
-
 const DEPTHS = [
   { id: "overview", label: "Tổng quan — mỗi mục một trang" },
   { id: "standard", label: "Vừa — có bảng và sơ đồ chính" },
   { id: "detailed", label: "Chi tiết tới từng luồng nghiệp vụ" },
 ];
 
-// Rows of the "Kiểm soát tài liệu" table. In D1 there is no Word template yet, so every row is
-// marked as one Studio would add; D3/D4 replace `source` with what was actually found in the mẫu.
+// Rows of the "Kiểm soát tài liệu" table. Rows are marked as ones Studio would build; when a
+// template is attached, D3/D4 replaces `source` with what was actually detected inside it (Q16).
 const CONTROL_ROWS = [
   { key: "title", label: "Tên tài liệu", value: "theo chuẩn đã chọn", on: true },
   { key: "docId", label: "Mã tài liệu", value: "tự sinh, sửa được", on: true },
@@ -35,9 +24,9 @@ const CONTROL_ROWS = [
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
-const vnDate = (iso) => iso.split("-").reverse().join("/");
+const fileName = (p) => String(p || "").split(/[\\/]/).pop();
 
-export default function DocWizard({ project, standards, composable, settings, onSettings, onCancel, onCreated }) {
+export default function DocWizard({ project, standards, composable, tones, settings, onSettings, onCancel, onCreated }) {
   const [step, setStep] = useState(1);
   const [extra, setExtra] = useState([]);
   const [scope, setScope] = useState({ mode: "all", byAuthor: false, authors: [], from: "", to: "" });
@@ -47,8 +36,8 @@ export default function DocWizard({ project, standards, composable, settings, on
   const [standardId, setStandardId] = useState(standards[0]?.id || "arc42");
   const [picks, setPicks] = useState([]);
   const [control, setControl] = useState(CONTROL_ROWS.map((r) => ({ ...r, enabled: r.on, source: "added" })));
-  const [history, setHistory] = useState([{ date: today(), version: "1.0", change: "Khởi tạo", by: "" }]);
-  const [style, setStyle] = useState({ tone: "concise", language: "vi-keep-en", depth: "detailed" });
+  const [history, setHistory] = useState([{ date: today(), version: "1.0", change: "Khởi tạo", by: "", byAuto: true }]);
+  const [style, setStyle] = useState({ tone: "concise", language: "vi-keep-en", depth: "detailed", templatePath: "" });
   const [docIdPrefix, setDocIdPrefix] = useState("");
   const [classification, setClassification] = useState("Nội bộ");
   const [est, setEst] = useState(null);
@@ -65,6 +54,12 @@ export default function DocWizard({ project, standards, composable, settings, on
   const sectionTotal = custom
     ? pickedDocs.reduce((n, d) => n + d.sections, 0)
     : (std?.sectionCount || 0);
+  const tone = (tones || []).find((t) => t.id === style.tone) || (tones || [])[0] || null;
+
+  // Which template will be used: this set's own beats the studio-wide default (fallback).
+  const globalTemplate = settings?.defaultTemplatePath || "";
+  const effectiveTemplate = style.templatePath || globalTemplate;
+  const templateSource = style.templatePath ? "set" : (globalTemplate ? "global" : "none");
 
   // git identities of the project repo, grouped per person
   useEffect(() => {
@@ -94,9 +89,29 @@ export default function DocWizard({ project, standards, composable, settings, on
       .then(setEst).catch(() => setEst(null));
   }, [standardId, picks, custom]);
 
-  const addFolder = async (kind) => {
+  // "Người sửa" follows the author selection: one person (or several spellings of one name) fills
+  // it in; a mixed selection leaves it blank because there is no single right answer.
+  const selectedNames = useMemo(() => {
+    const names = new Set();
+    for (const g of authorGroups)
+      for (const id of g.identities)
+        if (scope.authors.includes(id.email || id.name) && id.name) names.add(id.name.trim());
+    return [...names];
+  }, [authorGroups, scope.authors]);
+  const autoBy = scope.byAuthor && selectedNames.length === 1 ? selectedNames[0] : "";
+  useEffect(() => {
+    setHistory((rows) => rows.map((r) => (r.byAuto ? { ...r, by: autoBy } : r)));
+  }, [autoBy]);
+
+  const addReference = async () => {
     const r = await fetch("/api/pick-folder", { method: "POST" }).then((x) => x.json()).catch(() => ({}));
-    if (r.path) setExtra((s) => [...s, { kind, path: r.path }]);
+    if (r.path) setExtra((s) => [...s, { kind: "reference", path: r.path }]);
+    else if (r.error) setErr(r.error);
+  };
+
+  const pickTemplate = async () => {
+    const r = await fetch("/api/doc-scan/pick-docx").then((x) => x.json()).catch(() => ({}));
+    if (r.path) setStyle((s) => ({ ...s, templatePath: r.path }));
     else if (r.error) setErr(r.error);
   };
 
@@ -106,6 +121,15 @@ export default function DocWizard({ project, standards, composable, settings, on
     const ids = g.identities.map((i) => i.email || i.name).filter(Boolean);
     setScope((s) => ({ ...s, authors: [...new Set([...s.authors, ...ids])] }));
   };
+  const dropIdentity = (id) => setScope((s) => ({ ...s, authors: s.authors.filter((x) => x !== id) }));
+  const dropGroup = (g) => {
+    const ids = new Set(g.identities.map((i) => i.email || i.name));
+    setScope((s) => ({ ...s, authors: s.authors.filter((x) => !ids.has(x)) }));
+  };
+  // People currently selected, with their identities — a person can own several e-mails.
+  const selectedGroups = authorGroups
+    .map((g) => ({ g, ids: g.identities.filter((i) => scope.authors.includes(i.email || i.name)) }))
+    .filter((x) => x.ids.length);
 
   const create = async () => {
     setBusy(true); setErr("");
@@ -118,7 +142,7 @@ export default function DocWizard({ project, standards, composable, settings, on
         meta: { docIdPrefix, classification, docStatus: "Bản nháp",
           approvals: control.find((c) => c.key === "approvals")?.enabled || false,
           control: control.map(({ key, label, source, enabled, value }) => ({ key, label, source, enabled, value })),
-          history },
+          history: history.map(({ date, version, change, by }) => ({ date, version, change, by })) },
         style,
       };
       const r = await fetch(`/api/projects/${project.id}/doc-jobs`, {
@@ -172,17 +196,17 @@ export default function DocWizard({ project, standards, composable, settings, on
             </div>
             {extra.map((e, i) => (
               <div className="dg-card dg-src" key={i} style={{ marginTop: 7 }}>
-                <span className="pill">{e.kind === "reference" ? "tham chiếu" : "mã nguồn"}</span>
-                <div><b>{e.path.split(/[\\/]/).pop()}</b><div className="path">{e.path}</div></div>
+                <span className="pill">tài liệu</span>
+                <div><b>{fileName(e.path)}</b><div className="path">{e.path}</div></div>
                 <button className="mini danger" onClick={() => setExtra((s) => s.filter((_, j) => j !== i))}>Bỏ</button>
               </div>
             ))}
             <div className="dg-row" style={{ marginTop: 8 }}>
-              <button className="ghost" onClick={() => addFolder("code")}>＋ Thư mục mã nguồn của sản phẩm này…</button>
-              <button className="ghost" onClick={() => addFolder("reference")}>＋ Tài liệu tham chiếu…</button>
+              <button className="ghost" onClick={addReference}>＋ Tài liệu…</button>
             </div>
-            <p className="dg-note">Nguồn chính luôn là repo của project đang mở. Chỉ thêm được thư mục
-              <b> thuộc cùng sản phẩm</b> và tài liệu tham chiếu — không lấy mã nguồn của project khác.</p>
+            <p className="dg-note">Mã nguồn cần viết tài liệu chính là repo của project đang mở — không thêm
+              nguồn mã nguồn nào khác. Thêm ở đây là <b>tài liệu tham chiếu</b>: hướng dẫn cũ, đặc tả,
+              biên bản — agent đọc để hiểu bối cảnh và trích hình minh hoạ.</p>
           </div>
 
           <div className="dg-card">
@@ -212,35 +236,62 @@ export default function DocWizard({ project, standards, composable, settings, on
             </button>
 
             {scope.byAuthor && (
-              <div className="dg-row" style={{ marginTop: 11 }}>
-                <div className="dg-field" style={{ flex: "2 1 330px" }}>
-                  <span className="dg-label">Tác giả (git) — gom mọi identity của một người</span>
+              <>
+                <div className="dg-field" style={{ marginTop: 11 }}>
+                  <span className="dg-label">Tác giả (git) — một người có thể có nhiều email</span>
+                  {selectedGroups.map(({ g, ids }) => (
+                    <div className="dg-person" key={g.key}>
+                      <div className="dg-person-h">
+                        <b>{g.label}</b>
+                        <span className="dg-dim">{g.commits} commit · {g.identities.length} identity</span>
+                        <button className="mini danger" onClick={() => dropGroup(g)}>Bỏ cả người này</button>
+                      </div>
+                      <div className="dg-chips">
+                        {g.identities.map((i) => {
+                          const id = i.email || i.name;
+                          const on = ids.includes(i);
+                          return (
+                            <span className={"dg-chip" + (on ? "" : " off")} key={id} title={`${i.name} · ${i.commits} commit`}>
+                              {id} · {i.commits}
+                              {on
+                                ? <button title="Bỏ identity này" onClick={() => dropIdentity(id)}>✕</button>
+                                : <button title="Thêm lại identity này"
+                                    onClick={() => setScope((s) => ({ ...s, authors: [...s.authors, id] }))}>＋</button>}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                   <div className="dg-chips">
-                    {scope.authors.map((a) => (
-                      <span className="dg-chip" key={a}>{a}
-                        <button title="Bỏ identity này"
-                          onClick={() => setScope((s) => ({ ...s, authors: s.authors.filter((x) => x !== a) }))}>✕</button>
-                      </span>
-                    ))}
                     <select className="dg-inp" value="" onChange={(e) => { addAuthorGroup(e.target.value); e.target.value = ""; }}>
                       <option value="">＋ thêm tác giả…</option>
                       {authorGroups.map((g) => (
-                        <option key={g.key} value={g.key}>{g.label} · {g.commits} commit · {g.identities.length} identity</option>
+                        <option key={g.key} value={g.key}>
+                          {g.label} · {g.commits} commit · {g.identities.length} identity
+                          {g.identities.length > 1 ? ` (${g.identities.map((i) => i.email || i.name).join(", ")})` : ""}
+                        </option>
                       ))}
                     </select>
+                    {!selectedGroups.length && <span className="dg-dim">chưa chọn ai — xem trước vẫn tính toàn bộ repo</span>}
+                  </div>
+                  <p className="dg-note">Studio gom các identity trùng tên hoặc trùng phần đầu email thành
+                    <b> một người</b>. Trùng tên mà khác email hết thì vẫn về một nhóm, mọi email hiện thành
+                    thẻ riêng ở trên — bỏ thẻ nào thì email đó không được tính.</p>
+                </div>
+                <div className="dg-row" style={{ marginTop: 4 }}>
+                  <div className="dg-field" style={{ flex: "0 0 150px" }}>
+                    <span className="dg-label">Từ ngày</span>
+                    <input className="dg-inp" type="date" value={scope.from}
+                      onChange={(e) => setScope((s) => ({ ...s, from: e.target.value }))} />
+                  </div>
+                  <div className="dg-field" style={{ flex: "0 0 150px" }}>
+                    <span className="dg-label">Đến ngày</span>
+                    <input className="dg-inp" type="date" value={scope.to}
+                      onChange={(e) => setScope((s) => ({ ...s, to: e.target.value }))} />
                   </div>
                 </div>
-                <div className="dg-field" style={{ flex: "0 0 140px" }}>
-                  <span className="dg-label">Từ ngày</span>
-                  <input className="dg-inp" type="date" value={scope.from}
-                    onChange={(e) => setScope((s) => ({ ...s, from: e.target.value }))} />
-                </div>
-                <div className="dg-field" style={{ flex: "0 0 140px" }}>
-                  <span className="dg-label">Đến ngày</span>
-                  <input className="dg-inp" type="date" value={scope.to}
-                    onChange={(e) => setScope((s) => ({ ...s, to: e.target.value }))} />
-                </div>
-              </div>
+              </>
             )}
 
             <div className="dg-note" style={{ marginTop: 10 }}>
@@ -268,11 +319,14 @@ export default function DocWizard({ project, standards, composable, settings, on
             <span className="dg-label">Chuẩn áp dụng — quyết định bộ tài liệu gồm những file nào</span>
             <div className="dg-opts">
               {standards.map((s) => (
-                <Radio key={s.id} on={standardId === s.id} onClick={() => setStandardId(s.id)}
-                  title={s.label} sub={`${s.docs[0].title}${s.docCount > 1 ? "…" : ""} · ${s.docCount} file · ${s.sectionCount} mục`} />
+                <StandardOption key={s.id} on={standardId === s.id} onClick={() => setStandardId(s.id)}
+                  title={s.label} sub={`${s.docCount} file · ${s.sectionCount} mục`}
+                  hint={s.summary} files={s.docs.map((d) => ({ name: d.short, hint: d.hint, sections: d.sections.length }))} />
               ))}
-              <Radio on={custom} onClick={() => setStandardId("custom")}
-                title="Tuỳ chọn" sub="Tự ghép tài liệu từ các chuẩn trên" />
+              <StandardOption on={custom} onClick={() => setStandardId("custom")}
+                title="Tuỳ chọn" sub={picks.length ? `${picks.length} file · ${sectionTotal} mục` : "chọn file bên dưới"}
+                hint="Tự ghép tài liệu từ các chuẩn trên — vẫn là tài liệu của chuẩn quốc tế."
+                files={pickedDocs.map((d) => ({ name: d.short, hint: d.hint, sections: d.sections }))} />
             </div>
           </div>
 
@@ -348,7 +402,9 @@ export default function DocWizard({ project, standards, composable, settings, on
                       {["date", "version", "change", "by"].map((f) => (
                         <td key={f}>
                           <input className="dg-inp" style={{ width: "100%" }} value={h[f]}
-                            onChange={(e) => setHistory((s) => s.map((r, j) => j === i ? { ...r, [f]: e.target.value } : r))} />
+                            placeholder={f === "by" && !autoBy ? "tự nhập" : ""}
+                            onChange={(e) => setHistory((s) => s.map((r, j) => j === i
+                              ? { ...r, [f]: e.target.value, ...(f === "by" ? { byAuto: false } : {}) } : r))} />
                         </td>
                       ))}
                       <td>{history.length > 1 &&
@@ -359,21 +415,38 @@ export default function DocWizard({ project, standards, composable, settings, on
               </table>
             </div>
             <button className="mini" style={{ marginTop: 8 }}
-              onClick={() => setHistory((s) => [...s, { date: today(), version: "", change: "", by: "" }])}>
+              onClick={() => setHistory((s) => [...s, { date: today(), version: "", change: "", by: autoBy, byAuto: true }])}>
               ＋ Thêm dòng
             </button>
-            <p className="dg-note" style={{ marginTop: 8 }}>Phiên bản của bộ tài liệu là dòng cuối của bảng này.
-              Mỗi lần dựng lại, một dòng mới được thêm từ khác biệt nội dung (D2).</p>
+            <p className="dg-note" style={{ marginTop: 8 }}>
+              {scope.byAuthor && autoBy
+                ? <>“Người sửa” lấy tên tác giả git đang chọn (<b>{autoBy}</b>) — sửa tay được.</>
+                : scope.byAuthor && selectedNames.length > 1
+                  ? <>Đang chọn {selectedNames.length} người khác tên ({selectedNames.join(", ")}) nên “Người sửa”
+                      để trống, tự nhập.</>
+                  : <>Chọn tác giả git ở bước 1 thì “Người sửa” tự điền theo tên tác giả.</>}
+              {" "}Phiên bản của bộ tài liệu là dòng cuối bảng này; mỗi lần dựng lại sẽ thêm một dòng từ
+              khác biệt nội dung (D2).
+            </p>
           </div>
 
           <div className="dg-card">
             <div className="dg-row" style={{ alignItems: "center", marginBottom: 10 }}>
               <div className="dg-label">Bảng “Kiểm soát tài liệu” — thông tin đầu tài liệu</div>
-              <span className="pill" style={{ marginLeft: "auto" }}>chưa gắn mẫu Word</span>
+              <span className={"pill " + (templateSource === "none" ? "" : "ok")} style={{ marginLeft: "auto" }}>
+                {templateSource === "set" ? "mẫu riêng của bộ này"
+                  : templateSource === "global" ? "kế thừa mẫu toàn cục" : "chưa gắn mẫu Word"}
+              </span>
+              <button className="mini" onClick={() => setStep(3)}>Chọn mẫu ở bước 3 →</button>
             </div>
-            <p className="dg-note" style={{ marginBottom: 11 }}>Khi bộ này gắn mẫu Word, Studio dò bảng kiểm soát
-              có sẵn trong mẫu và <b>giữ nguyên bố cục của mẫu</b>, chỉ điền giá trị. Chưa có mẫu thì dựng bảng mới
-              theo các dòng bạn bật dưới đây.</p>
+            <p className="dg-note" style={{ marginBottom: 11 }}>
+              {effectiveTemplate
+                ? <>Mẫu đang dùng: <b>{fileName(effectiveTemplate)}</b>. Studio sẽ dò bảng kiểm soát có sẵn
+                    trong mẫu và <b>giữ nguyên bố cục của mẫu</b>, chỉ điền giá trị; dòng nào chuẩn có mà mẫu
+                    thiếu thì đề xuất bổ sung. Phần dò mẫu chạy ở D3/D4.</>
+                : <>Chưa có mẫu nào: Studio dựng bảng mới theo các dòng bạn bật dưới đây. Gắn mẫu ở bước 3
+                    thì bảng sẽ lấy theo bố cục của mẫu.</>}
+            </p>
             <div className="dg-row" style={{ marginBottom: 10 }}>
               <div className="dg-field" style={{ flex: "1 1 180px" }}>
                 <span className="dg-label">Tiền tố mã tài liệu</span>
@@ -400,7 +473,7 @@ export default function DocWizard({ project, standards, composable, settings, on
                         </button>
                       </td>
                       <td>{r.label}</td>
-                      <td><span className="pill acc">＋ Studio dựng</span></td>
+                      <td><span className="pill acc">{effectiveTemplate ? "dò trong mẫu (D3)" : "＋ Studio dựng"}</span></td>
                       <td className="dg-muted">{r.value}</td>
                     </tr>
                   ))}
@@ -414,25 +487,46 @@ export default function DocWizard({ project, standards, composable, settings, on
       {step === 3 && (
         <div className="dg-pane">
           <div className="dg-field">
-            <span className="dg-label">Mẫu Word</span>
+            <span className="dg-label">Mẫu Word — mẫu của bộ này được ưu tiên, mẫu toàn cục chỉ là dự phòng</span>
             <div className="dg-row" style={{ gap: 7 }}>
-              <input className="dg-inp" style={{ flex: 1 }} value="(chưa có mẫu — dùng theme mặc định)" readOnly />
-              <span className="pill">theme mặc định</span>
+              <input className="dg-inp" style={{ flex: 1 }} readOnly
+                value={effectiveTemplate ? fileName(effectiveTemplate) : "(chưa có mẫu — dùng theme mặc định)"}
+                title={effectiveTemplate} />
+              <span className={"pill " + (templateSource === "set" ? "acc" : "")}>
+                {templateSource === "set" ? "riêng bộ này" : templateSource === "global" ? "kế thừa toàn cục" : "theme mặc định"}
+              </span>
+              <button className="ghost" onClick={pickTemplate}>
+                {style.templatePath ? "Đổi mẫu…" : "Chọn mẫu cho bộ này…"}
+              </button>
+              {style.templatePath &&
+                <button className="mini danger" onClick={() => setStyle((s) => ({ ...s, templatePath: "" }))}>
+                  Bỏ, dùng mẫu toàn cục
+                </button>}
             </div>
-            <p className="dg-note">Quản lý mẫu Word ba cấp và dò style từ mẫu là phần của D3/D4.
-              Nội dung không phụ thuộc mẫu: đổi mẫu về sau không phải viết lại.</p>
+            <div className="dg-row" style={{ gap: 7 }}>
+              <input className="dg-inp" style={{ flex: 1 }} readOnly
+                value={globalTemplate ? fileName(globalTemplate) : "(chưa đặt mẫu toàn cục)"} title={globalTemplate} />
+              <button className="mini" onClick={async () => {
+                const r = await fetch("/api/doc-scan/pick-docx").then((x) => x.json()).catch(() => ({}));
+                if (r.path) onSettings({ defaultTemplatePath: r.path });
+                else if (r.error) setErr(r.error);
+              }}>Đặt mẫu toàn cục…</button>
+              {globalTemplate &&
+                <button className="mini danger" onClick={() => onSettings({ defaultTemplatePath: "" })}>Xoá</button>}
+            </div>
+            <p className="dg-note">Đọc named style và bảng kiểm soát từ mẫu là phần của D3/D4. Nội dung không
+              phụ thuộc mẫu: đổi mẫu về sau không phải viết lại.</p>
           </div>
 
           <div className="dg-field">
             <span className="dg-label">Văn phong</span>
             <div className="dg-opts">
-              {TONES.map((t) => (
+              {(tones || []).map((t) => (
                 <Radio key={t.id} on={style.tone === t.id} onClick={() => setStyle((s) => ({ ...s, tone: t.id }))}
-                  title={t.label} sub={t.sample} />
+                  title={t.label} sub={t.blurb} />
               ))}
             </div>
-            <p className="dg-note">Văn phong áp theo <b>loại nội dung</b>: mục <code>reference</code> luôn súc tích,
-              mục <code>howto</code> luôn đánh số bước — lựa chọn ở đây chi phối phần <code>explanation</code>.</p>
+            {tone && <ToneSample tone={tone} />}
           </div>
 
           <div className="dg-row">
@@ -472,7 +566,7 @@ export default function DocWizard({ project, standards, composable, settings, on
       )}
 
       <TokenConfirm open={ask} kind="survey" tokens={surveyTokens} settings={settings} spent={0}
-        onCancel={() => setAsk(false)}
+        onSettings={onSettings} onCancel={() => setAsk(false)}
         onConfirm={(dontAsk) => {
           setAsk(false);
           if (dontAsk) onSettings({ dontAsk: { ...(settings?.dontAsk || {}), survey: true } });
@@ -488,5 +582,68 @@ function Radio({ on, onClick, title, sub }) {
       <i className="bx radio">{on ? "●" : ""}</i>
       <span className="dg-chk-t"><b>{title}</b><span>{sub}</span></span>
     </button>
+  );
+}
+
+// A standard is chosen for what it produces, so the selected option lists its files by name.
+function StandardOption({ on, onClick, title, sub, hint, files }) {
+  return (
+    <button className={"dg-chk" + (on ? " on" : "")} onClick={onClick}>
+      <i className="bx radio">{on ? "●" : ""}</i>
+      <span className="dg-chk-t">
+        <b>{title}</b>
+        <span>{sub}</span>
+        {on && (
+          <>
+            {hint && <span className="dg-dim">{hint}</span>}
+            {files.length
+              ? <span className="dg-files">
+                  {files.map((f) => (
+                    <span className="dg-file" key={f.name} title={f.hint}>
+                      📘 {f.name} <i>{f.sections} mục</i>
+                    </span>
+                  ))}
+                </span>
+              : <span className="dg-dim">— chưa chọn file nào —</span>}
+          </>
+        )}
+      </span>
+    </button>
+  );
+}
+
+// Tone preview. Shows the same three kinds of section every time, because the point is that a
+// tone only moves `explanation`: reference stays terse, howto stays numbered (RULESET N6).
+function ToneSample({ tone }) {
+  return (
+    <div className="dg-card dg-tone">
+      <div className="dg-tone-h">
+        <span className="dg-label">Xem trước văn phong “{tone.label}”</span>
+        <span className="pill acc">chi phối mục explanation</span>
+      </div>
+      <div className="dg-tone-block">
+        <div className="dg-tone-k">
+          <abbr className="tt" title="Giải thích: vì sao lại thế — dành cho người muốn hiểu bối cảnh">explanation</abbr>
+          <span className="pill acc">đổi theo văn phong</span>
+        </div>
+        {tone.samples.explanation.map((p, i) => <p key={i}>{p}</p>)}
+      </div>
+      <div className="dg-tone-block muted">
+        <div className="dg-tone-k">
+          <abbr className="tt" title="Tra cứu: nó là gì, giá trị bao nhiêu, ở đâu — viết súc tích">reference</abbr>
+          <span className="pill">luôn súc tích · không đổi</span>
+        </div>
+        <ul>{tone.samples.reference.map((p, i) => <li key={i}>{p}</li>)}</ul>
+      </div>
+      <div className="dg-tone-block muted">
+        <div className="dg-tone-k">
+          <abbr className="tt" title="Hướng dẫn: các bước để làm xong một việc cụ thể">howto</abbr>
+          <span className="pill">luôn đánh số bước · không đổi</span>
+        </div>
+        <ol>{tone.samples.howto.map((p, i) => <li key={i}>{p}</li>)}</ol>
+      </div>
+      <p className="dg-note">Ba khối trên là cùng một nội dung viết ở ba loại mục khác nhau. Chọn văn phong
+        nào cũng chỉ đổi khối <code>explanation</code> — đó là lý do tài liệu không bị “văn vẻ” ở chỗ cần tra cứu.</p>
+    </div>
   );
 }
