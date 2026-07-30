@@ -6,6 +6,7 @@
 import { readFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { runClaude } from "../runner.js";
+import { ensureClaudeOnPath, explainSpawnError } from "./claudeBin.js";
 import { WORK_DIR } from "../store/docgen.js";
 import { SOURCE_LABELS } from "./standards/index.js";
 
@@ -124,6 +125,11 @@ export function parseSurveyFile(file) {
 
 // Runs the survey session. Rejects on spawn/exit failure so the caller can park the job in `error`.
 export async function runSurvey({ job, std, repoPath, configDir, model, allowCommands, revise, plan, onEvent, onSpawn }) {
+  // Resolve the CLI before doing any work: failing here with an explanation beats failing two
+  // minutes later with "spawn claude ENOENT".
+  const cli = ensureClaudeOnPath();
+  if (!cli.ok) throw new Error("Không tìm thấy Claude CLI. " + cli.hint);
+
   const dir = workDirFor(job.id);
   const outFile = join(dir, revise ? "revise.json" : "survey.json");
   try { rmSync(outFile, { force: true }); } catch { /* first run */ }
@@ -145,6 +151,6 @@ export async function runSurvey({ job, std, repoPath, configDir, model, allowCom
     // the exit code; if there is no file, the original error is what the user needs to see.
     exitError = e;
   }
-  if (exitError && !existsSync(outFile)) throw exitError;
+  if (exitError && !existsSync(outFile)) throw new Error(explainSpawnError(exitError));
   return { survey: parseSurveyFile(outFile), result, outFile, exitError: exitError?.message || null };
 }

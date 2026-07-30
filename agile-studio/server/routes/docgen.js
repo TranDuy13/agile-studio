@@ -10,6 +10,7 @@ import { killChild } from "../runner.js";
 import { listStandards, getStandard, publicStandard, composeStandard, listComposableDocs }
   from "../docgen/standards/index.js";
 import { runSurvey } from "../docgen/survey.js";
+import { ensureClaudeOnPath } from "../docgen/claudeBin.js";
 import { buildPlan, mergeRevision, planToPreset, applyPreset, planStats } from "../docgen/plan.js";
 import { estimateSurvey, estimateRevise, estimatePlan, windowsOf } from "../docgen/estimate.js";
 import { gitAuthors, scanPreview } from "../docgen/gitscan.js";
@@ -139,7 +140,9 @@ export function registerDocRoutes(app, broadcast = () => {}) {
     const p = store.getProject(req.params.id);
     if (!p) return bad(res, 404, "Không thấy project");
     const jobs = docgenStore.listJobs(p.id).map((j) => withPlanSummary(j));
-    res.json({ jobs, storage: docgenStore.status() });
+    // Report a missing CLI here rather than letting the user find out two minutes into a survey.
+    const cli = ensureClaudeOnPath();
+    res.json({ jobs, storage: docgenStore.status(), cli: { ok: cli.ok, hint: cli.hint || null } });
   });
 
   app.post("/api/projects/:id/doc-jobs", (req, res) => {
