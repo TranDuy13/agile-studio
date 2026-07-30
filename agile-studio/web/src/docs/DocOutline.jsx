@@ -4,6 +4,11 @@ import Dialog, { DialogButtons, Field } from "./Dialog.jsx";
 
 // The approval gate (MH 3): the agent proposes, the user edits, and only then is the outline
 // frozen. Nothing downstream has a stable denominator until this screen is done (Q8).
+//
+// Layout: the outline is the subject of the screen, so it gets the width. The right rail carries
+// only what you decide with — forecast, engine, the approve button — and sticks to the viewport
+// so the primary action never scrolls away. Survey findings are a wide grid UNDER both columns:
+// ten sentences squeezed into a 300px rail wrap into forty lines and leave the page lopsided.
 
 const ENGINES = [
   { id: "per-doc", label: "Song song theo tài liệu", sub: "Nhanh · tạm dừng, đổi account được" },
@@ -22,6 +27,14 @@ const levelOf = (num) => Math.min(3, String(num).split(".").length + 1); // doc 
 const hhmm = (t) => new Date(t).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit",
   day: "2-digit", month: "2-digit" });
 
+// A full path in a narrow column truncates to nothing readable. The tail is the informative part,
+// so show the last two segments and keep the whole thing in the tooltip.
+function shortSource(p) {
+  const s = String(p || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const parts = s.split("/").filter(Boolean);
+  return parts.length <= 2 ? s : "…/" + parts.slice(-2).join("/");
+}
+
 export default function DocOutline({ jobId, settings, onSettings, onBack, onJobChanged }) {
   const [job, setJob] = useState(null);
   const [plan, setPlan] = useState(null);
@@ -38,6 +51,7 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
   const [toast, setToast] = useState("");
   const [ask, setAsk] = useState(null);           // token dialog: "revise"
   const [dialog, setDialog] = useState(null);     // { kind, ...state }
+  const [showFacts, setShowFacts] = useState(true);
   const planRef = useRef(null);
 
   const load = useCallback(() => {
@@ -195,10 +209,10 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
         {job && <span className="pill acc">{job.standardLabel}</span>}
       </div>
       {job && (
-        <div className="dg-card">
-          <p className="dg-muted" style={{ fontSize: 12 }}>Chưa có dàn ý. Cho agent khảo sát mã nguồn để đề xuất,
-            hoặc áp một preset đã lưu (không tốn token).</p>
-          <div className="dg-row" style={{ marginTop: 10 }}>
+        <div className="dg-card dg-empty">
+          <p className="dg-muted">Chưa có dàn ý. Cho agent khảo sát mã nguồn để đề xuất, hoặc áp một preset
+            đã lưu (không tốn token).</p>
+          <div className="dg-row">
             <button className="primary" onClick={() => fetch(`/api/doc-jobs/${jobId}/survey`, { method: "POST" })
               .then((r) => r.json()).then((d) => (d.error ? setErr(d.error) : onBack()))}>
               Khảo sát & đề xuất dàn ý <TokenChip tokens={est?.survey || 0} threshold={settings?.tokenThreshold} />
@@ -209,7 +223,7 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                 .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
-          {err && <div className="dg-err" style={{ marginTop: 10 }}>{err}</div>}
+          {err && <div className="dg-err">{err}</div>}
         </div>
       )}
     </div>
@@ -218,10 +232,18 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
   const writeTokens = stats?.estTokens || 0;
   const windows = writeTokens / (settings?.tokensPer5h || 2000000);
   const leftPct = est?.usage?.fiveHourPct != null ? Math.max(0, 100 - Math.round(est.usage.fiveHourPct)) : null;
-  const allSections = plan.docs.flatMap((d) => d.sections);
-  const optionalOn = allSections.filter((s) => !s.required && s.enabled !== false).length;
-  const offCount = allSections.filter((s) => s.enabled === false).length;
+  const all = plan.docs.flatMap((d) => d.sections);
+  const count = {
+    on: all.filter((s) => s.enabled !== false).length,
+    off: all.filter((s) => s.enabled === false).length,
+    required: all.filter((s) => s.required).length,
+    agent: all.filter((s) => s.origin === "agent").length,
+    user: all.filter((s) => s.origin === "user").length,
+    total: all.length,
+  };
+  const optionalOn = all.filter((s) => !s.required && s.enabled !== false).length;
   const overBudget = leftPct != null && windows * 100 > leftPct;
+  const facts = job?.facts?.items || [];
 
   return (
     <div className="dg-pane">
@@ -232,7 +254,6 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
         {approved
           ? <span className="pill ok">✓ dàn ý đã chốt</span>
           : <span className="pill acc">⏸ chờ duyệt dàn ý</span>}
-        <span className="pill">{stats?.docs ?? plan.docs.length} tài liệu · {stats?.sections ?? 0} mục</span>
         <span className="dg-spacer" />
         <span className="dg-sub">
           {job?.survey?.elapsedMs ? `khảo sát ${Math.round(job.survey.elapsedMs / 1000)}s · ` : ""}
@@ -248,11 +269,10 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
 
       {approved && (
         <div className="dg-banner">
-          <div>
+          <div className="dg-banner-t">
             <b>✓ Dàn ý đã đóng băng lúc {hhmm(plan.approvedAt)}</b>
-            <span>{stats?.sections} mục được chọn là mẫu số cho mọi con số tiến độ về sau
-              {offCount ? `; ${offCount} mục bị bỏ qua` : ""}. Cách chạy: {ENGINES.find((e) => e.id === (plan.engine || engine))?.label}.
-              Bước viết nội dung theo dàn ý này là feature kế tiếp.</span>
+            <span>{count.on} mục là mẫu số cho mọi con số tiến độ về sau
+              {count.off ? ` · ${count.off} mục bỏ qua` : ""} · {ENGINES.find((e) => e.id === (plan.engine || engine))?.label}</span>
           </div>
           <div className="dg-banner-acts">
             <button className="ghost" onClick={onBack}>← Về danh sách</button>
@@ -262,8 +282,8 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
       )}
 
       <div className="dg-outline">
-        <div className="dg-card dg-treecard">
-          <div className="dg-toolbar">
+        <section className="dg-card dg-treecard">
+          <header className="dg-toolbar">
             <div className="dg-toolgrp">
               <span className="dg-label">Chọn nhanh</span>
               <button className="mini" disabled={locked} onClick={() => bulk("all")}>Tất cả</button>
@@ -271,13 +291,23 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
               <button className="mini" disabled={locked} onClick={() => bulk("required")}
                 title="Chỉ giữ các mục chuẩn bắt buộc">Chỉ bắt buộc</button>
               <button className="mini" disabled={locked} onClick={() => bulk("agent")}
-                title="Giữ mục bắt buộc và mục agent đề xuất thêm">Bắt buộc + agent đề xuất</button>
+                title="Giữ mục bắt buộc và mục agent đề xuất thêm">+ agent đề xuất</button>
             </div>
-            <div className="dg-toolgrp">
+            <div className="dg-toolgrp dg-toolgrp-r">
               <button className="mini" disabled={locked} onClick={() => setDialog({ kind: "add" })}>＋ Thêm mục</button>
               <button className="mini" disabled={locked} onClick={() => setDialog({ kind: "preset" })}>Áp preset…</button>
               <button className="mini" onClick={() => setDialog({ kind: "savePreset" })}>💾 Lưu thành preset</button>
             </div>
+          </header>
+
+          <div className="dg-counts">
+            <span className="pill acc"><b className="num">{count.on}</b>/{count.total} mục bật</span>
+            <span className="pill">{count.required} bắt buộc</span>
+            {count.agent > 0 && <span className="pill">{count.agent} agent đề xuất</span>}
+            {count.user > 0 && <span className="pill">{count.user} tự thêm</span>}
+            {count.off > 0 && <span className="pill err">{count.off} bỏ qua</span>}
+            <span className="dg-spacer" />
+            <span className="dg-sub">Bấm đúp tên mục để đổi tên · kéo ⠿ để đổi thứ tự</span>
           </div>
 
           <div className="dg-tree">
@@ -312,8 +342,9 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                     ) : (
                       <span className="nm" onDoubleClick={() => !locked && setEditing(s.id)}
                         title="Bấm đúp để đổi tên">
-                        <b className="no">{s.num}.</b> <abbr className="tt" title={s.hint}>{s.title}</abbr>
-                        {s.origin === "agent" && <span className="pill acc">agent đề xuất</span>}
+                        <b className="no">{s.num}.</b>
+                        <abbr className="tt" title={s.hint}>{s.title}</abbr>
+                        {s.origin === "agent" && <span className="pill acc">agent</span>}
                         {s.origin === "user" && <span className="pill acc">tự thêm</span>}
                         {s.required && <span className="pill">bắt buộc</span>}
                         {s.proposedDrop && s.enabled !== false &&
@@ -321,23 +352,44 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                       </span>
                     )}
                     <span className="src" title={(s.sources || []).join("\n") || s.note}>
-                      {s.sources?.length ? s.sources.slice(0, 2).join(" · ") : (s.note || "—")}
+                      {s.sources?.length
+                        ? <>
+                            {s.sources.slice(0, 2).map((p) => <em key={p}>{shortSource(p)}</em>)}
+                            {s.sources.length > 2 && <em className="more">+{s.sources.length - 2}</em>}
+                          </>
+                        : <em className="none">{s.note ? "agent đề xuất bỏ" : "chưa gắn nguồn"}</em>}
                     </span>
                     {s.origin === "user" && !locked &&
-                      <button className="mini danger" title="Xoá mục này"
+                      <button className="mini danger x" title="Xoá mục này"
                         onClick={() => removeSection(doc.key, s.id)}>✕</button>}
                   </div>
                 ))}
               </React.Fragment>
             ))}
           </div>
-        </div>
+        </section>
 
-        <div className="dg-side">
+        <aside className="dg-side">
           <div className="dg-card">
-            <div className="dg-label" style={{ marginBottom: 8 }}>Cách chạy <span className="dg-dim">· đổi được giữa chừng</span></div>
+            <div className="dg-label mb">Dự báo chi phí</div>
+            <div className="dg-stat big"><span>Viết cả bộ</span><b>~{fmtTokens(writeTokens)}</b></div>
+            <div className="dg-stat"><span>Quy đổi</span><b>≈ {windows.toFixed(windows < 1 ? 2 : 1)} cửa sổ 5h</b></div>
+            <div className="dg-stat">
+              <span>Account</span>
+              <b>{est?.account?.label || est?.account?.id || "—"}{leftPct != null ? ` · còn ${leftPct}%` : ""}</b>
+            </div>
+            {overBudget && (
+              <div className="dg-note warn">Vượt quota còn lại của account đang chọn — tắt bớt {optionalOn} mục
+                không bắt buộc, hoặc đổi account.</div>
+            )}
+            <p className="dg-note">Ước tính có sai số lớn. Đây là chi phí của <b>bước viết</b> sau này —
+              chốt dàn ý không tiêu token nào.</p>
+          </div>
+
+          <div className="dg-card">
+            <div className="dg-label mb">Cách chạy <span className="dg-dim">· đổi được giữa chừng</span></div>
             {ENGINES.map((e) => (
-              <button key={e.id} className={"dg-chk" + (engine === e.id ? " on" : "")} style={{ marginBottom: 6 }}
+              <button key={e.id} className={"dg-chk" + (engine === e.id ? " on" : "")}
                 disabled={locked} onClick={() => setEngine(e.id)}>
                 <i className="bx radio">{engine === e.id ? "●" : ""}</i>
                 <span className="dg-chk-t"><b>{e.label}</b><span>{e.sub}</span></span>
@@ -345,37 +397,8 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
             ))}
           </div>
 
-          <div className="dg-card">
-            <div className="dg-label" style={{ marginBottom: 8 }}>Dự báo chi phí</div>
-            <div className="dg-stat"><span>Viết cả bộ</span><b>~{fmtTokens(writeTokens)} token</b></div>
-            <div className="dg-stat"><span>Quy đổi</span><b>≈ {windows.toFixed(windows < 1 ? 2 : 1)} cửa sổ 5h</b></div>
-            <div className="dg-stat">
-              <span>Account</span>
-              <b>{est?.account?.label || est?.account?.id || "—"}{leftPct != null ? ` · còn ${leftPct}%` : ""}</b>
-            </div>
-            {overBudget && (
-              <div className="dg-note warn">
-                Vượt phần quota còn lại của account đang chọn. Tắt bớt {optionalOn} mục không bắt buộc,
-                hoặc đổi account — tổng cập nhật ngay khi tắt.
-              </div>
-            )}
-            <p className="dg-note">Đây là <b>ước tính có sai số lớn</b>: chi phí thật phụ thuộc mã nguồn phải
-              đọc. Số này là chi phí của <b>bước viết</b> sau này, chốt dàn ý không tiêu token nào.</p>
-          </div>
-
-          {job?.facts?.items?.length > 0 && (
-            <div className="dg-card">
-              <div className="dg-label" style={{ marginBottom: 8 }}>Agent phát hiện</div>
-              {job.facts.items.map((f, i) => (
-                <div className={"dg-fact" + (f.level === "warn" ? " warn" : "")} key={i}>
-                  <i>{f.level === "warn" ? "!" : "✓"}</i><span>{f.text}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {!approved && (
-            <>
+          {!approved ? (
+            <div className="dg-card dg-actions">
               <div className="dg-field">
                 <span className="dg-label">Yêu cầu agent sửa dàn ý</span>
                 <textarea className="dg-inp" rows={2} value={revise}
@@ -387,28 +410,47 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                 {busy === "revise" ? "Đang gửi…" : "↻ Đề xuất lại dàn ý"}{" "}
                 <TokenChip tokens={est?.revise || 0} threshold={settings?.tokenThreshold} />
               </button>
-              <button className="primary" disabled={busy === "approve" || !stats?.sections}
+              <button className="primary big" disabled={busy === "approve" || !count.on}
                 onClick={() => setDialog({ kind: "approve" })}>
-                {busy === "approve" ? "Đang chốt…" : "✔ Duyệt & chốt dàn ý"}
+                {busy === "approve" ? "Đang chốt…" : `✔ Duyệt & chốt ${count.on} mục`}
               </button>
-              <p className="dg-note">Duyệt xong dàn ý đóng băng và màn này chuyển sang chỉ đọc. Mở khoá lại được
-                nếu cần sửa.</p>
-            </>
+              <p className="dg-note">Chốt xong màn này chuyển sang chỉ đọc; cần sửa thì mở khoá lại được.</p>
+            </div>
+          ) : (
+            <div className="dg-card dg-actions">
+              <button className="ghost" disabled={busy === "unlock"} onClick={() => setDialog({ kind: "unlock" })}>
+                🔓 Mở khoá để sửa dàn ý
+              </button>
+            </div>
           )}
-
-          {approved && (
-            <button className="ghost" disabled={busy === "unlock"} onClick={() => setDialog({ kind: "unlock" })}>
-              🔓 Mở khoá để sửa dàn ý
-            </button>
-          )}
-        </div>
+        </aside>
       </div>
+
+      {facts.length > 0 && (
+        <section className="dg-card">
+          <button className="dg-collapse" onClick={() => setShowFacts((v) => !v)}>
+            <span className="dg-label">Agent phát hiện khi khảo sát</span>
+            <span className="pill">{facts.length}</span>
+            <span className="dg-spacer" />
+            <span className="dg-dim">{showFacts ? "▾ thu gọn" : "▸ mở"}</span>
+          </button>
+          {showFacts && (
+            <div className="dg-facts">
+              {facts.map((f, i) => (
+                <div className={"dg-fact" + (f.level === "warn" ? " warn" : "")} key={i}>
+                  <i>{f.level === "warn" ? "!" : "✓"}</i><span>{f.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <AddSectionDialog open={dialog?.kind === "add"} plan={plan}
         onCancel={() => setDialog(null)} onOk={(v) => { setDialog(null); addSection(v); }} />
 
       <SavePresetDialog open={dialog?.kind === "savePreset"} defaultName={`${job?.name} — dàn ý`}
-        sections={stats?.sections} onCancel={() => setDialog(null)} onOk={savePreset} />
+        sections={count.on} onCancel={() => setDialog(null)} onOk={savePreset} />
 
       <ApplyPresetDialog open={dialog?.kind === "preset"} presets={presets.filter((p) => p.standardId === job?.standardId)}
         onCancel={() => setDialog(null)} onOk={(id) => { setDialog(null); applyPreset(id); }} />
@@ -416,11 +458,11 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
       <Dialog open={dialog?.kind === "approve"} title="Chốt dàn ý này?" onClose={() => setDialog(null)}
         footer={<DialogButtons onCancel={() => setDialog(null)} onOk={approve} okLabel="✔ Chốt dàn ý" />}>
         <div className="dg-card" style={{ padding: "9px 11px" }}>
-          <div className="dg-stat"><span>Bộ tài liệu</span><b>{stats?.docs} tài liệu · {stats?.sections} mục bật</b></div>
-          {offCount > 0 && <div className="dg-stat"><span>Bỏ qua</span><b>{offCount} mục</b></div>}
+          <div className="dg-stat"><span>Bộ tài liệu</span><b>{stats?.docs} tài liệu · {count.on} mục bật</b></div>
+          {count.off > 0 && <div className="dg-stat"><span>Bỏ qua</span><b>{count.off} mục</b></div>}
           <div className="dg-stat"><span>Cách chạy</span><b>{ENGINES.find((e) => e.id === engine)?.label}</b></div>
         </div>
-        <p>Sau khi chốt, <b className="hl">{stats?.sections} mục</b> là mẫu số cho mọi con số tiến độ về sau.
+        <p>Sau khi chốt, <b className="hl">{count.on} mục</b> là mẫu số cho mọi con số tiến độ về sau.
           Màn này chuyển sang chỉ đọc; cần sửa thì mở khoá lại được.</p>
         <p>⛽ <b className="hl">~{fmtTokens(writeTokens)} token</b> là chi phí ước tính của <b className="hl">bước
           viết nội dung</b> sau này — chốt dàn ý không tiêu token nào.</p>
