@@ -123,23 +123,55 @@
 .dg-tone-block li { font-size:11.5px; line-height:1.62; color:var(--ink); margin-bottom:4px; }
 .dg-tone-block code { background:var(--surface2); border-radius:4px; padding:1px 4px; }
 
-/* outline */
-.dg-outline { display:grid; grid-template-columns:1fr 300px; gap:12px; align-items:start; }
-.dg-tree { display:flex; flex-direction:column; max-height:52vh; overflow:auto; }
-.dg-tr { display:flex; align-items:center; gap:9px; padding:6px 8px; border-radius:7px; }
+/* outline
+   min-width:0 on both grid children is what stops a long source path from pushing the whole app
+   sideways: without it a grid track refuses to shrink below its content and the page grows a
+   horizontal scrollbar. */
+.dg-outline { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,300px); gap:12px; align-items:start; }
+.dg-outline > * { min-width:0; }
+.dg-treecard { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.dg-toolbar { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center; padding-bottom:9px; border-bottom:1px solid var(--line); }
+.dg-toolgrp { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.dg-toolgrp .dg-label { margin-right:2px; }
+
+.dg-tree { display:flex; flex-direction:column; max-height:56vh; overflow-y:auto; overflow-x:hidden; }
+.dg-tr { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:7px; min-width:0; }
 .dg-tr:hover { background:var(--surface2); }
-.dg-tr .grip { color:var(--dim); cursor:grab; }
-.dg-tr .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.dg-tr .src { font-size:10px; color:var(--dim); white-space:nowrap; max-width:38%; overflow:hidden; text-overflow:ellipsis; }
-.dg-tr .tgl { background:none; border:none; color:var(--muted); padding:0; width:14px; }
+.dg-tr .grip { color:var(--dim); cursor:grab; flex:0 0 auto; }
+.dg-tr .nm { flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.dg-tr .nm .no { font-weight:600; color:var(--muted); flex:0 0 auto; }
+.dg-tr .nm .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* sources were unreadable at 10px in --dim: same family as the row background */
+.dg-tr .src { flex:0 1 34%; min-width:0; font-size:11px; color:var(--muted); text-align:right;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; }
+.dg-tr:hover .src { color:var(--ink); }
+/* a checkbox you have to aim at is a bug: 24px hit area, visible border, clear on/off */
+.dg-tr .tgl { flex:0 0 auto; width:24px; height:24px; display:grid; place-items:center;
+  background:var(--surface2); border:1px solid var(--line); border-radius:6px; color:var(--muted);
+  font-size:14px; line-height:1; padding:0; }
+.dg-tr .tgl[aria-pressed="true"] { color:var(--accent); border-color:rgba(124,156,255,0.5); }
+.dg-tr .tgl:hover:not(:disabled) { border-color:var(--accent); color:var(--ink); }
+.dg-tr .tgl:disabled { opacity:0.45; cursor:default; }
 .dg-tr.l1 { padding-left:8px; font-weight:600; border-top:1px solid var(--line); margin-top:6px; padding-top:10px; }
-.dg-tr.l2 { padding-left:30px; }
-.dg-tr.l3 { padding-left:52px; color:var(--muted); }
+.dg-tr.l2 { padding-left:26px; }
+.dg-tr.l3 { padding-left:46px; }
+.dg-tr.l3 .nm { color:var(--muted); }
 .dg-tr.added { background:rgba(53,208,127,0.09); }
-.dg-tr.off .nm { text-decoration:line-through; color:var(--muted); }
+.dg-tr.off .nm .tt { text-decoration:line-through; color:var(--muted); }
 .dg-tr.drop { background:rgba(255,91,91,0.08); }
 .dg-tr.dragover { outline:1px dashed var(--accent); outline-offset:-1px; }
-.dg-tr .rename { flex:1; min-width:0; background:var(--surface2); border:1px solid var(--accent); color:var(--ink); border-radius:6px; padding:3px 7px; font-family:var(--mono); font-size:11.5px; }
+.dg-tr .rename { flex:1 1 auto; min-width:0; background:var(--surface2); border:1px solid var(--accent); color:var(--ink); border-radius:6px; padding:4px 7px; font-family:var(--mono); font-size:11.5px; }
+
+/* approved banner + toast */
+.dg-banner { display:flex; align-items:center; gap:14px; flex-wrap:wrap; background:rgba(53,208,127,0.09);
+  border:1px solid rgba(53,208,127,0.4); border-radius:10px; padding:12px 14px; }
+.dg-banner > div:first-child { flex:1 1 320px; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.dg-banner b { color:var(--done); }
+.dg-banner span { color:var(--muted); font-size:11px; line-height:1.55; }
+.dg-banner-acts { display:flex; gap:7px; flex-wrap:wrap; }
+.dg-toast { background:rgba(53,208,127,0.12); border:1px solid rgba(53,208,127,0.4); color:var(--ink);
+  border-radius:8px; padding:8px 11px; font-size:11.5px; }
+.dg-note.warn { border-color:rgba(255,91,91,0.5); color:var(--ink); }
 .dg-side { display:flex; flex-direction:column; gap:11px; }
 .dg-stat { display:flex; justify-content:space-between; align-items:baseline; padding:5px 0; font-size:11.5px; color:var(--muted); }
 .dg-stat b { font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
@@ -148,13 +180,36 @@
 .dg-fact.warn i { color:var(--error); }
 .dg textarea.dg-inp { resize:vertical; line-height:1.5; }
 
-/* token confirm dialog */
-.dg-dlgbg { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center; z-index:30; }
-.dg-dlg { width:min(440px,92vw); background:var(--surface); border:1px solid var(--accent); border-radius:12px; padding:17px; display:flex; flex-direction:column; gap:12px; font-family:var(--mono); font-size:12.5px; color:var(--ink); }
-.dg-dlg h4 { margin:0; font-size:13.5px; }
-.dg-dlg p { margin:0; color:var(--muted); font-size:11.5px; line-height:1.55; }
+/* dialogs */
+.dg-dlgbg { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:30; padding:20px; }
+.dg-dlg { width:min(460px,94vw); max-height:88vh; overflow:auto; background:var(--surface);
+  border:1px solid var(--line); border-radius:12px; padding:16px 18px; display:flex; flex-direction:column;
+  gap:12px; font-family:var(--mono); font-size:12.5px; color:var(--ink);
+  box-shadow:0 22px 60px rgba(0,0,0,0.6); }
+.dg-dlg-h { display:flex; align-items:center; gap:10px; }
+.dg-dlg h4 { margin:0; font-size:14px; flex:1; }
+.dg-dlg-x { background:none; border:none; color:var(--muted); font-size:15px; padding:0 2px; line-height:1; }
+.dg-dlg-x:hover { color:var(--ink); }
+.dg-dlg p { margin:0; color:var(--muted); font-size:11.5px; line-height:1.6; }
 .dg-dlg b.hl { color:var(--ink); }
+.dg-dlg-body { display:flex; flex-direction:column; gap:11px; }
+.dg-dlg-body:empty { display:none; }
+.dg-dlg-hint { color:var(--dim); font-size:10.5px; line-height:1.5; }
+.dg-dlg-f { display:flex; justify-content:flex-end; gap:8px; padding-top:2px; }
+.dg .primary.danger { background:var(--error); color:#fff; }
 
-@media (max-width:900px) {
-  .dg-outline { grid-template-columns:1fr; }
+/* responsive: the sidebar drops under the tree before anything is forced to scroll sideways */
+@media (max-width:1100px) {
+  .dg-outline { grid-template-columns:minmax(0,1fr); }
+  .dg-tree { max-height:none; }
+  .dg-side { flex-direction:row; flex-wrap:wrap; }
+  .dg-side > * { flex:1 1 260px; }
+}
+@media (max-width:760px) {
+  .dg { padding:12px 12px 24px; }
+  .dg-tr .src { display:none; }            /* the path is still in the row's title tooltip */
+  .dg-tr.l2 { padding-left:14px; }
+  .dg-tr.l3 { padding-left:26px; }
+  .dg-side > * { flex:1 1 100%; }
+  .dg-head { gap:8px; }
 }

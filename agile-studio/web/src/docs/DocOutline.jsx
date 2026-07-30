@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import TokenConfirm, { TokenChip, fmtTokens, shouldAsk } from "./TokenConfirm.jsx";
+import Dialog, { DialogButtons, Field } from "./Dialog.jsx";
 
 // The approval gate (MH 3): the agent proposes, the user edits, and only then is the outline
 // frozen. Nothing downstream has a stable denominator until this screen is done (Q8).
@@ -10,7 +11,16 @@ const ENGINES = [
   { id: "per-section", label: "Song song theo mục", sub: "Nhanh nhất · tốn token nhất" },
 ];
 
+const KINDS = [
+  { id: "reference", label: "reference — tra cứu, súc tích" },
+  { id: "howto", label: "howto — các bước làm" },
+  { id: "explanation", label: "explanation — giải thích vì sao" },
+  { id: "tutorial", label: "tutorial — dắt đi một lượt" },
+];
+
 const levelOf = (num) => Math.min(3, String(num).split(".").length + 1); // doc row is level 1
+const hhmm = (t) => new Date(t).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit",
+  day: "2-digit", month: "2-digit" });
 
 export default function DocOutline({ jobId, settings, onSettings, onBack, onJobChanged }) {
   const [job, setJob] = useState(null);
@@ -25,7 +35,9 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
   const [over, setOver] = useState(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
-  const [ask, setAsk] = useState(null);           // "write" | "revise"
+  const [toast, setToast] = useState("");
+  const [ask, setAsk] = useState(null);           // token dialog: "revise"
+  const [dialog, setDialog] = useState(null);     // { kind, ...state }
   const planRef = useRef(null);
 
   const load = useCallback(() => {
@@ -40,7 +52,9 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
   }, [jobId]);
   useEffect(load, [load]);
 
+  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 5000); };
   const approved = !!plan?.approvedAt;
+  const locked = approved;   // a frozen outline is read-only until explicitly unlocked
 
   // Any structural edit goes straight to the server, which returns the recomputed forecast —
   // that is what makes the estimate move the moment a section is switched off (test case 6).
@@ -53,13 +67,15 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
     setStats(r.stats); setErr("");
   };
 
-  const mutateDoc = (docKey, fn) => {
+  const mutate = (fn) => {
     const next = JSON.parse(JSON.stringify(planRef.current));
-    const doc = next.docs.find((d) => d.key === docKey);
-    if (!doc) return;
-    fn(doc, next);
+    fn(next);
     save(next);
   };
+  const mutateDoc = (docKey, fn) => mutate((next) => {
+    const doc = next.docs.find((d) => d.key === docKey);
+    if (doc) fn(doc, next);
+  });
 
   const toggleSection = (docKey, id) =>
     mutateDoc(docKey, (doc) => {
@@ -67,28 +83,44 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
       if (s) { s.enabled = s.enabled === false; s.userEnabled = s.enabled; }
     });
 
+  // Bulk selection: picking 25 checkboxes by hand is the kind of work a toolbar should do.
+  const bulk = (mode) => mutate((next) => {
+    for (const doc of next.docs) for (const s of doc.sections) {
+      const on = mode === "all" ? true
+        : mode === "none" ? false
+        : mode === "required" ? !!s.required
+        : mode === "agent" ? (s.origin === "agent" || !!s.required)
+        : s.enabled !== false;
+      s.enabled = on; s.userEnabled = on;
+    }
+  });
+
   const renameSection = (docKey, id, title) =>
     mutateDoc(docKey, (doc) => {
       const s = doc.sections.find((x) => x.id === id);
       if (s && title.trim()) { s.title = title.trim(); s.userTitle = true; }
     });
 
-  const addSection = (docKey) => {
-    const title = prompt("Tên mục mới (giữ tiếng Anh nếu là tên mục của chuẩn):");
-    if (!title?.trim()) return;
-    mutateDoc(docKey, (doc) => {
-      const num = `${doc.sections.length + 1}`;
-      doc.sections.push({
-        id: `${docKey}/u${Date.now().toString(36)}`, num, title: title.trim(),
-        kind: "explanation", required: false, hint: "Mục do người dùng thêm",
-        accept: { minBlocks: 1, minSources: 1 }, from: [], sources: [],
-        origin: "user", enabled: true, status: "pending", words: 0,
-      });
-    });
-  };
-
   const removeSection = (docKey, id) =>
     mutateDoc(docKey, (doc) => { doc.sections = doc.sections.filter((s) => s.id !== id); });
+
+  const addSection = ({ docKey, title, kind, afterId }) => {
+    mutateDoc(docKey, (doc) => {
+      const at = doc.sections.findIndex((s) => s.id === afterId);
+      const parent = at >= 0 ? doc.sections[at] : null;
+      // Insert under the section it follows so the numbering stays inside the standard's scheme.
+      const base = parent ? String(parent.num).split(".")[0] : String(doc.sections.length + 1);
+      let num = parent ? `${base}.1` : base;
+      for (let i = 1; doc.sections.some((s) => String(s.num) === num); i++) num = `${base}.${i}`;
+      doc.sections.splice(at >= 0 ? at + 1 : doc.sections.length, 0, {
+        id: `${docKey}/u${Date.now().toString(36)}`, num, title: title.trim(), kind,
+        required: false, hint: "Mục do người dùng thêm",
+        accept: { minBlocks: 1, minSources: 1 }, from: [], sources: [],
+        origin: "user", enabled: true, userEnabled: true, status: "pending", words: 0,
+      });
+    });
+    flash(`Đã thêm mục “${title.trim()}”.`);
+  };
 
   const onDrop = (docKey, index) => {
     if (!drag || drag.docKey !== docKey) { setDrag(null); setOver(null); return; }
@@ -106,28 +138,39 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
     }).then((x) => x.json()).catch((e) => ({ error: String(e.message) }));
     setBusy("");
     if (r.error) setErr(r.error);
-    else { setRevise(""); onJobChanged?.(); }
+    else { setRevise(""); flash("Đã gửi yêu cầu — agent đang đề xuất lại dàn ý."); onJobChanged?.(); }
   };
 
   const approve = async () => {
-    setBusy("approve"); setErr("");
+    setBusy("approve"); setErr(""); setDialog(null);
     const r = await fetch(`/api/doc-jobs/${jobId}/plan/approve`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ engine }),
     }).then((x) => x.json()).catch((e) => ({ error: String(e.message) }));
     setBusy("");
     if (r.error) return setErr(r.error);
     setPlan(r.plan); planRef.current = r.plan; setStats(r.stats); setJob(r.job);
+    flash(`Đã chốt dàn ý — ${r.stats.sections} mục là mẫu số cho mọi con số tiến độ về sau.`);
     onJobChanged?.();
   };
 
-  const savePreset = async () => {
-    const name = prompt("Tên preset (dùng lại cho project khác):", `${job?.name} — dàn ý`);
-    if (!name?.trim()) return;
+  const unlock = async () => {
+    setDialog(null); setBusy("unlock");
+    const r = await fetch(`/api/doc-jobs/${jobId}/plan/unlock`, { method: "POST" })
+      .then((x) => x.json()).catch((e) => ({ error: String(e.message) }));
+    setBusy("");
+    if (r.error) return setErr(r.error);
+    setPlan(r.plan); planRef.current = r.plan; setStats(r.stats); setJob(r.job);
+    flash("Đã mở khoá — sửa xong nhớ duyệt lại.");
+    onJobChanged?.();
+  };
+
+  const savePreset = async (name) => {
+    setDialog(null);
     const r = await fetch(`/api/doc-jobs/${jobId}/plan/save-preset`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
     }).then((x) => x.json());
     if (r.error) setErr(r.error);
-    else setPresets((s) => [r.preset, ...s.filter((p) => p.id !== r.preset.id)]);
+    else { setPresets((s) => [r.preset, ...s.filter((p) => p.id !== r.preset.id)]); flash(`Đã lưu preset “${r.preset.name}”.`); }
   };
 
   const applyPreset = async (presetId) => {
@@ -136,7 +179,7 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ presetId }),
     }).then((x) => x.json());
     if (r.error) setErr(r.error);
-    else { setPlan(r.plan); planRef.current = r.plan; setStats(r.stats); }
+    else { setPlan(r.plan); planRef.current = r.plan; setStats(r.stats); flash("Đã áp preset — sửa lại thoải mái rồi duyệt."); }
   };
 
   if (err && !plan) return <div className="dg-pane"><div className="dg-err">{err}</div>
@@ -175,8 +218,9 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
   const writeTokens = stats?.estTokens || 0;
   const windows = writeTokens / (settings?.tokensPer5h || 2000000);
   const leftPct = est?.usage?.fiveHourPct != null ? Math.max(0, 100 - Math.round(est.usage.fiveHourPct)) : null;
-  const optionalOn = plan.docs.flatMap((d) => d.sections)
-    .filter((s) => !s.required && s.enabled !== false).length;
+  const allSections = plan.docs.flatMap((d) => d.sections);
+  const optionalOn = allSections.filter((s) => !s.required && s.enabled !== false).length;
+  const offCount = allSections.filter((s) => s.enabled === false).length;
   const overBudget = leftPct != null && windows * 100 > leftPct;
 
   return (
@@ -197,23 +241,43 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
         </span>
       </div>
 
+      {toast && <div className="dg-toast">✅ {toast}</div>}
       {err && <div className="dg-err">{err}</div>}
       {job?.survey?.warning && <div className="dg-note">⚠ Phiên khảo sát thoát bất thường nhưng vẫn ghi được
         kết quả nên dàn ý dưới đây là hợp lệ. Lý do CLI báo: {job.survey.warning}</div>}
-      {approved && <div className="dg-note">Dàn ý đã đóng băng thành kế hoạch: {stats?.sections} mục là mẫu số
-        cho mọi con số tiến độ về sau. Viết nội dung là bước kế tiếp (D2).</div>}
+
+      {approved && (
+        <div className="dg-banner">
+          <div>
+            <b>✓ Dàn ý đã đóng băng lúc {hhmm(plan.approvedAt)}</b>
+            <span>{stats?.sections} mục được chọn là mẫu số cho mọi con số tiến độ về sau
+              {offCount ? `; ${offCount} mục bị bỏ qua` : ""}. Cách chạy: {ENGINES.find((e) => e.id === (plan.engine || engine))?.label}.
+              Bước viết nội dung theo dàn ý này là feature kế tiếp.</span>
+          </div>
+          <div className="dg-banner-acts">
+            <button className="ghost" onClick={onBack}>← Về danh sách</button>
+            <button className="primary" disabled title="Viết nội dung là feature kế tiếp (D2)">▶ Bắt đầu viết</button>
+          </div>
+        </div>
+      )}
 
       <div className="dg-outline">
-        <div className="dg-card">
-          <div className="dg-row" style={{ marginBottom: 9 }}>
-            <button className="mini" disabled={approved} onClick={() => addSection(plan.docs[0].key)}>＋ Thêm mục</button>
-            <select className="dg-inp" style={{ padding: "4px 8px", fontSize: 10.5 }} value="" disabled={approved}
-              onChange={(e) => { applyPreset(e.target.value); e.target.value = ""; }}>
-              <option value="">Áp preset…</option>
-              {presets.filter((p) => p.standardId === job?.standardId)
-                .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-            <button className="mini" onClick={savePreset}>💾 Lưu dàn ý này thành preset</button>
+        <div className="dg-card dg-treecard">
+          <div className="dg-toolbar">
+            <div className="dg-toolgrp">
+              <span className="dg-label">Chọn nhanh</span>
+              <button className="mini" disabled={locked} onClick={() => bulk("all")}>Tất cả</button>
+              <button className="mini" disabled={locked} onClick={() => bulk("none")}>Bỏ tất cả</button>
+              <button className="mini" disabled={locked} onClick={() => bulk("required")}
+                title="Chỉ giữ các mục chuẩn bắt buộc">Chỉ bắt buộc</button>
+              <button className="mini" disabled={locked} onClick={() => bulk("agent")}
+                title="Giữ mục bắt buộc và mục agent đề xuất thêm">Bắt buộc + agent đề xuất</button>
+            </div>
+            <div className="dg-toolgrp">
+              <button className="mini" disabled={locked} onClick={() => setDialog({ kind: "add" })}>＋ Thêm mục</button>
+              <button className="mini" disabled={locked} onClick={() => setDialog({ kind: "preset" })}>Áp preset…</button>
+              <button className="mini" onClick={() => setDialog({ kind: "savePreset" })}>💾 Lưu thành preset</button>
+            </div>
           </div>
 
           <div className="dg-tree">
@@ -229,13 +293,14 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                       + (s.enabled === false ? " off" : "") + (s.proposedDrop ? " drop" : "")
                       + (s.origin === "agent" ? " added" : "")
                       + (over && over.docKey === doc.key && over.index === i ? " dragover" : "")}
-                    draggable={!approved && !editing}
+                    draggable={!locked && !editing}
                     onDragStart={() => setDrag({ docKey: doc.key, index: i })}
                     onDragOver={(e) => { e.preventDefault(); setOver({ docKey: doc.key, index: i }); }}
                     onDragLeave={() => setOver(null)}
                     onDrop={(e) => { e.preventDefault(); onDrop(doc.key, i); }}>
                     <span className="grip" title="Kéo để đổi thứ tự">⠿</span>
-                    <button className="tgl" disabled={approved} title={s.enabled === false ? "Bật mục" : "Tắt mục"}
+                    <button className="tgl" disabled={locked} aria-pressed={s.enabled !== false}
+                      title={s.enabled === false ? "Bật mục này" : "Tắt mục này"}
                       onClick={() => toggleSection(doc.key, s.id)}>{s.enabled === false ? "☐" : "☑"}</button>
                     {editing === s.id ? (
                       <input className="rename" autoFocus defaultValue={s.title}
@@ -245,20 +310,22 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                           if (e.key === "Escape") setEditing(null);
                         }} />
                     ) : (
-                      <span className="nm" onDoubleClick={() => !approved && setEditing(s.id)}
+                      <span className="nm" onDoubleClick={() => !locked && setEditing(s.id)}
                         title="Bấm đúp để đổi tên">
-                        {s.num}. <abbr className="tt" title={s.hint}>{s.title}</abbr>
-                        {s.origin === "agent" && <span className="pill acc" style={{ marginLeft: 6 }}>agent đề xuất</span>}
-                        {s.required && <span className="pill" style={{ marginLeft: 6 }}>bắt buộc</span>}
+                        <b className="no">{s.num}.</b> <abbr className="tt" title={s.hint}>{s.title}</abbr>
+                        {s.origin === "agent" && <span className="pill acc">agent đề xuất</span>}
+                        {s.origin === "user" && <span className="pill acc">tự thêm</span>}
+                        {s.required && <span className="pill">bắt buộc</span>}
                         {s.proposedDrop && s.enabled !== false &&
-                          <span className="pill err" style={{ marginLeft: 6 }} title={s.note}>agent đề xuất bỏ</span>}
+                          <span className="pill err" title={s.note}>agent đề xuất bỏ</span>}
                       </span>
                     )}
                     <span className="src" title={(s.sources || []).join("\n") || s.note}>
                       {s.sources?.length ? s.sources.slice(0, 2).join(" · ") : (s.note || "—")}
                     </span>
-                    {s.origin === "user" && !approved &&
-                      <button className="mini danger" onClick={() => removeSection(doc.key, s.id)}>✕</button>}
+                    {s.origin === "user" && !locked &&
+                      <button className="mini danger" title="Xoá mục này"
+                        onClick={() => removeSection(doc.key, s.id)}>✕</button>}
                   </div>
                 ))}
               </React.Fragment>
@@ -271,7 +338,7 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
             <div className="dg-label" style={{ marginBottom: 8 }}>Cách chạy <span className="dg-dim">· đổi được giữa chừng</span></div>
             {ENGINES.map((e) => (
               <button key={e.id} className={"dg-chk" + (engine === e.id ? " on" : "")} style={{ marginBottom: 6 }}
-                disabled={approved} onClick={() => setEngine(e.id)}>
+                disabled={locked} onClick={() => setEngine(e.id)}>
                 <i className="bx radio">{engine === e.id ? "●" : ""}</i>
                 <span className="dg-chk-t"><b>{e.label}</b><span>{e.sub}</span></span>
               </button>
@@ -287,13 +354,13 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
               <b>{est?.account?.label || est?.account?.id || "—"}{leftPct != null ? ` · còn ${leftPct}%` : ""}</b>
             </div>
             {overBudget && (
-              <div className="dg-note" style={{ marginTop: 8, borderColor: "var(--error)" }}>
+              <div className="dg-note warn">
                 Vượt phần quota còn lại của account đang chọn. Tắt bớt {optionalOn} mục không bắt buộc,
                 hoặc đổi account — tổng cập nhật ngay khi tắt.
               </div>
             )}
-            <p className="dg-note" style={{ marginTop: 8 }}>Đây là <b>ước tính có sai số lớn</b>: chi phí thật
-              phụ thuộc mã nguồn phải đọc. Con số thật cập nhật dần khi chạy.</p>
+            <p className="dg-note">Đây là <b>ước tính có sai số lớn</b>: chi phí thật phụ thuộc mã nguồn phải
+              đọc. Số này là chi phí của <b>bước viết</b> sau này, chốt dàn ý không tiêu token nào.</p>
           </div>
 
           {job?.facts?.items?.length > 0 && (
@@ -307,36 +374,157 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
             </div>
           )}
 
-          <div className="dg-field">
-            <span className="dg-label">Yêu cầu agent sửa dàn ý</span>
-            <textarea className="dg-inp" rows={2} value={revise} disabled={approved}
-              placeholder="vd: Gộp 6.1 vào mục 8. Tách job nền thành từng job một."
-              onChange={(e) => setRevise(e.target.value)} />
-          </div>
-          <button className="ghost" disabled={approved || !revise.trim() || busy === "revise"}
-            onClick={() => (shouldAsk("revise", est?.revise || 0, settings) ? setAsk("revise") : runRevise())}>
-            {busy === "revise" ? "Đang gửi…" : "↻ Đề xuất lại dàn ý"}{" "}
-            <TokenChip tokens={est?.revise || 0} threshold={settings?.tokenThreshold} />
-          </button>
+          {!approved && (
+            <>
+              <div className="dg-field">
+                <span className="dg-label">Yêu cầu agent sửa dàn ý</span>
+                <textarea className="dg-inp" rows={2} value={revise}
+                  placeholder="vd: Gộp 6.1 vào mục 8. Tách job nền thành từng job một."
+                  onChange={(e) => setRevise(e.target.value)} />
+              </div>
+              <button className="ghost" disabled={!revise.trim() || busy === "revise"}
+                onClick={() => (shouldAsk("revise", est?.revise || 0, settings) ? setAsk("revise") : runRevise())}>
+                {busy === "revise" ? "Đang gửi…" : "↻ Đề xuất lại dàn ý"}{" "}
+                <TokenChip tokens={est?.revise || 0} threshold={settings?.tokenThreshold} />
+              </button>
+              <button className="primary" disabled={busy === "approve" || !stats?.sections}
+                onClick={() => setDialog({ kind: "approve" })}>
+                {busy === "approve" ? "Đang chốt…" : "✔ Duyệt & chốt dàn ý"}
+              </button>
+              <p className="dg-note">Duyệt xong dàn ý đóng băng và màn này chuyển sang chỉ đọc. Mở khoá lại được
+                nếu cần sửa.</p>
+            </>
+          )}
 
-          <button className="primary" disabled={approved || busy === "approve"}
-            onClick={() => (shouldAsk("write", writeTokens, settings) ? setAsk("write") : approve())}>
-            {approved ? "✓ Đã duyệt" : busy === "approve" ? "Đang chốt…" : "✔ Duyệt & chốt dàn ý"}{" "}
-            <TokenChip tokens={writeTokens} threshold={settings?.tokenThreshold} />
-          </button>
-          <p className="dg-note">Duyệt xong dàn ý đóng băng. Viết nội dung theo dàn ý này là bước kế tiếp.</p>
+          {approved && (
+            <button className="ghost" disabled={busy === "unlock"} onClick={() => setDialog({ kind: "unlock" })}>
+              🔓 Mở khoá để sửa dàn ý
+            </button>
+          )}
         </div>
       </div>
 
-      <TokenConfirm open={!!ask} kind={ask || "write"} settings={settings}
-        tokens={ask === "revise" ? (est?.revise || 0) : writeTokens}
-        account={est?.account} usage={est?.usage} spent={job?.metrics?.tokens || 0}
+      <AddSectionDialog open={dialog?.kind === "add"} plan={plan}
+        onCancel={() => setDialog(null)} onOk={(v) => { setDialog(null); addSection(v); }} />
+
+      <SavePresetDialog open={dialog?.kind === "savePreset"} defaultName={`${job?.name} — dàn ý`}
+        sections={stats?.sections} onCancel={() => setDialog(null)} onOk={savePreset} />
+
+      <ApplyPresetDialog open={dialog?.kind === "preset"} presets={presets.filter((p) => p.standardId === job?.standardId)}
+        onCancel={() => setDialog(null)} onOk={(id) => { setDialog(null); applyPreset(id); }} />
+
+      <Dialog open={dialog?.kind === "approve"} title="Chốt dàn ý này?" onClose={() => setDialog(null)}
+        footer={<DialogButtons onCancel={() => setDialog(null)} onOk={approve} okLabel="✔ Chốt dàn ý" />}>
+        <div className="dg-card" style={{ padding: "9px 11px" }}>
+          <div className="dg-stat"><span>Bộ tài liệu</span><b>{stats?.docs} tài liệu · {stats?.sections} mục bật</b></div>
+          {offCount > 0 && <div className="dg-stat"><span>Bỏ qua</span><b>{offCount} mục</b></div>}
+          <div className="dg-stat"><span>Cách chạy</span><b>{ENGINES.find((e) => e.id === engine)?.label}</b></div>
+        </div>
+        <p>Sau khi chốt, <b className="hl">{stats?.sections} mục</b> là mẫu số cho mọi con số tiến độ về sau.
+          Màn này chuyển sang chỉ đọc; cần sửa thì mở khoá lại được.</p>
+        <p>⛽ <b className="hl">~{fmtTokens(writeTokens)} token</b> là chi phí ước tính của <b className="hl">bước
+          viết nội dung</b> sau này — chốt dàn ý không tiêu token nào.</p>
+      </Dialog>
+
+      <Dialog open={dialog?.kind === "unlock"} title="Mở khoá dàn ý?" onClose={() => setDialog(null)}
+        footer={<DialogButtons onCancel={() => setDialog(null)} onOk={unlock} okLabel="🔓 Mở khoá" danger />}>
+        <p>Dàn ý đang là <b className="hl">mẫu số của tiến độ</b>. Mở khoá rồi thêm hoặc bớt mục sẽ làm mọi
+          phần trăm tính lại từ đầu, và các mục đã viết có thể không còn khớp dàn ý mới.</p>
+        <p>Muốn giữ nguyên bản đã chốt thì bấm Huỷ, rồi <b className="hl">lưu nó thành preset</b> và tạo một
+          bộ tài liệu mới từ preset đó.</p>
+      </Dialog>
+
+      <TokenConfirm open={!!ask} kind={ask || "revise"} settings={settings}
+        tokens={est?.revise || 0} account={est?.account} usage={est?.usage} spent={job?.metrics?.tokens || 0}
         onSettings={onSettings} onCancel={() => setAsk(null)}
         onConfirm={(dontAsk) => {
           const kind = ask; setAsk(null);
           if (dontAsk) onSettings({ dontAsk: { ...(settings?.dontAsk || {}), [kind]: true } });
-          if (kind === "revise") runRevise(); else approve();
+          runRevise();
         }} />
     </div>
+  );
+}
+
+function AddSectionDialog({ open, plan, onCancel, onOk }) {
+  const [docKey, setDocKey] = useState("");
+  const [title, setTitle] = useState("");
+  const [kind, setKind] = useState("explanation");
+  const [afterId, setAfterId] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    const first = plan?.docs?.[0];
+    setDocKey(first?.key || ""); setTitle(""); setKind("explanation");
+    setAfterId(first?.sections?.at(-1)?.id || "");
+  }, [open, plan]);
+  const doc = plan?.docs?.find((d) => d.key === docKey);
+  return (
+    <Dialog open={open} title="Thêm mục vào dàn ý" width={500} onClose={onCancel}
+      sub="Mục tự thêm nằm ngoài chuẩn nên không tính vào tiêu chí “Đầy đủ” khi chấm điểm."
+      footer={<DialogButtons onCancel={onCancel} okLabel="＋ Thêm mục" okDisabled={!title.trim() || !docKey}
+        onOk={() => onOk({ docKey, title, kind, afterId })} />}>
+      {plan?.docs?.length > 1 && (
+        <Field label="Thêm vào tài liệu">
+          <select className="dg-inp" value={docKey} onChange={(e) => {
+            setDocKey(e.target.value);
+            setAfterId(plan.docs.find((d) => d.key === e.target.value)?.sections?.at(-1)?.id || "");
+          }}>
+            {plan.docs.map((d) => <option key={d.key} value={d.key}>{d.file}</option>)}
+          </select>
+        </Field>
+      )}
+      <Field label="Tên mục" hint="Tên mục của chuẩn thì giữ nguyên tiếng Anh; mục tự nghĩ ra thì đặt tiếng Việt cũng được.">
+        <input className="dg-inp" value={title} placeholder="vd: Appendix — Command Reference"
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && title.trim()) onOk({ docKey, title, kind, afterId }); }} />
+      </Field>
+      <Field label="Loại nội dung (Diátaxis)" hint="Quyết định văn phong khi viết: reference luôn súc tích, howto luôn đánh số bước.">
+        <select className="dg-inp" value={kind} onChange={(e) => setKind(e.target.value)}>
+          {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+        </select>
+      </Field>
+      <Field label="Chèn sau mục">
+        <select className="dg-inp" value={afterId} onChange={(e) => setAfterId(e.target.value)}>
+          <option value="">— đầu tài liệu —</option>
+          {(doc?.sections || []).map((s) => <option key={s.id} value={s.id}>{s.num}. {s.title}</option>)}
+        </select>
+      </Field>
+    </Dialog>
+  );
+}
+
+function SavePresetDialog({ open, defaultName, sections, onCancel, onOk }) {
+  const [name, setName] = useState("");
+  useEffect(() => { if (open) setName(defaultName || ""); }, [open, defaultName]);
+  return (
+    <Dialog open={open} title="Lưu dàn ý này thành preset" onClose={onCancel}
+      sub="Preset là dàn ý dùng lại được: áp cho project khác rồi sửa tiếp thoải mái."
+      footer={<DialogButtons onCancel={onCancel} okLabel="💾 Lưu preset" okDisabled={!name.trim()}
+        onOk={() => onOk(name.trim())} />}>
+      <Field label="Tên preset" hint={`Lưu ${sections ?? "?"} mục đang bật, kèm thứ tự và tên mục đã sửa. Không lưu nguồn dữ liệu của project này.`}>
+        <input className="dg-inp" value={name} onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) onOk(name.trim()); }} />
+      </Field>
+    </Dialog>
+  );
+}
+
+function ApplyPresetDialog({ open, presets, onCancel, onOk }) {
+  const [id, setId] = useState("");
+  useEffect(() => { if (open) setId(presets[0]?.id || ""); }, [open, presets]);
+  return (
+    <Dialog open={open} title="Áp preset lên dàn ý" onClose={onCancel}
+      sub="Preset chỉ đổi danh sách mục, thứ tự và mục nào bật — nguồn dữ liệu agent đã tìm được vẫn giữ nguyên."
+      footer={<DialogButtons onCancel={onCancel} okLabel="Áp preset" okDisabled={!id} onOk={() => onOk(id)} />}>
+      {presets.length ? (
+        <Field label="Preset cùng chuẩn với bộ này">
+          <select className="dg-inp" value={id} onChange={(e) => setId(e.target.value)}>
+            {presets.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
+      ) : (
+        <p>Chưa có preset nào cùng chuẩn. Lưu dàn ý hiện tại thành preset trước, rồi áp nó cho project khác.</p>
+      )}
+    </Dialog>
   );
 }
