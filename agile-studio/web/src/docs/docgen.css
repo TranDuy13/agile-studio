@@ -123,62 +123,105 @@
 .dg-tone-block li { font-size:11.5px; line-height:1.62; color:var(--ink); margin-bottom:4px; }
 .dg-tone-block code { background:var(--surface2); border-radius:4px; padding:1px 4px; }
 
-/* outline
-   min-width:0 on both grid children is what stops a long source path from pushing the whole app
-   sideways: without it a grid track refuses to shrink below its content and the page grows a
-   horizontal scrollbar. */
-.dg-outline { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,300px); gap:12px; align-items:start; }
+/* ── Outline screen ────────────────────────────────────────────────────────────────────────
+   The outline is the subject: it takes the width. The rail holds only decisions and sticks to
+   the viewport so the approve button never scrolls out of reach. min-width:0 on both tracks is
+   what stops a long source path from widening the grid and giving the whole app a horizontal
+   scrollbar. */
+.dg-outline { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:14px; align-items:start; }
 .dg-outline > * { min-width:0; }
-.dg-treecard { display:flex; flex-direction:column; gap:10px; min-width:0; }
-.dg-toolbar { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center; padding-bottom:9px; border-bottom:1px solid var(--line); }
-.dg-toolgrp { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
-.dg-toolgrp .dg-label { margin-right:2px; }
+.dg-treecard { display:flex; flex-direction:column; gap:0; padding:0; overflow:hidden; }
+.dg-empty { display:flex; flex-direction:column; gap:12px; }
+.dg-label.mb { display:block; margin-bottom:9px; }
 
-.dg-tree { display:flex; flex-direction:column; max-height:56vh; overflow-y:auto; overflow-x:hidden; }
-.dg-tr { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:7px; min-width:0; }
+.dg-toolbar { display:flex; flex-wrap:wrap; gap:9px 16px; align-items:center;
+  padding:11px 14px; border-bottom:1px solid var(--line); background:var(--surface2); }
+.dg-toolgrp { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.dg-toolgrp-r { margin-left:auto; }
+.dg-counts { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:9px 14px;
+  border-bottom:1px solid var(--line); }
+.dg-counts .num { font-weight:600; }
+
+/* One row = one grid, so numbers, titles and sources line up down the whole tree instead of
+   drifting with the length of each title. */
+.dg-tree { display:flex; flex-direction:column; padding:6px 8px 10px; }
+.dg-tr { display:grid; grid-template-columns:14px 24px minmax(0,1fr) auto auto; gap:9px;
+  align-items:center; padding:4px 6px; border-radius:7px; min-width:0; }
 .dg-tr:hover { background:var(--surface2); }
-.dg-tr .grip { color:var(--dim); cursor:grab; flex:0 0 auto; }
-.dg-tr .nm { flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.dg-tr .nm .no { font-weight:600; color:var(--muted); flex:0 0 auto; }
+.dg-tr .grip { color:var(--dim); cursor:grab; font-size:11px; }
+.dg-tr .nm { min-width:0; display:flex; align-items:center; gap:7px; }
+.dg-tr .nm .no { color:var(--muted); font-weight:600; flex:0 0 auto; font-variant-numeric:tabular-nums; }
 .dg-tr .nm .tt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* sources were unreadable at 10px in --dim: same family as the row background */
-.dg-tr .src { flex:0 1 34%; min-width:0; font-size:11px; color:var(--muted); text-align:right;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; }
-.dg-tr:hover .src { color:var(--ink); }
+.dg-tr .nm .pill { flex:0 0 auto; }
+/* sources: readable size and colour, tail of the path, full value in the tooltip */
+.dg-tr .src { display:flex; gap:5px; justify-content:flex-end; align-items:center;
+  min-width:0; font-size:10.5px; color:var(--muted); }
+.dg-tr .src em { font-style:normal; background:var(--bg); border:1px solid var(--line);
+  border-radius:5px; padding:1px 6px; max-width:190px; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; }
+.dg-tr .src em.more { color:var(--dim); }
+.dg-tr .src em.none { background:none; border:none; color:var(--dim); padding:0; }
+.dg-tr:hover .src em { color:var(--ink); border-color:var(--dim); }
+.dg-tr .x { visibility:hidden; }
+.dg-tr:hover .x { visibility:visible; }
+
 /* a checkbox you have to aim at is a bug: 24px hit area, visible border, clear on/off */
-.dg-tr .tgl { flex:0 0 auto; width:24px; height:24px; display:grid; place-items:center;
-  background:var(--surface2); border:1px solid var(--line); border-radius:6px; color:var(--muted);
-  font-size:14px; line-height:1; padding:0; }
+.dg-tr .tgl { width:24px; height:24px; display:grid; place-items:center; background:var(--surface2);
+  border:1px solid var(--line); border-radius:6px; color:var(--muted); font-size:14px; line-height:1; padding:0; }
 .dg-tr .tgl[aria-pressed="true"] { color:var(--accent); border-color:rgba(124,156,255,0.5); }
 .dg-tr .tgl:hover:not(:disabled) { border-color:var(--accent); color:var(--ink); }
 .dg-tr .tgl:disabled { opacity:0.45; cursor:default; }
-.dg-tr.l1 { padding-left:8px; font-weight:600; border-top:1px solid var(--line); margin-top:6px; padding-top:10px; }
-.dg-tr.l2 { padding-left:26px; }
-.dg-tr.l3 { padding-left:46px; }
-.dg-tr.l3 .nm { color:var(--muted); }
-.dg-tr.added { background:rgba(53,208,127,0.09); }
-.dg-tr.off .nm .tt { text-decoration:line-through; color:var(--muted); }
-.dg-tr.drop { background:rgba(255,91,91,0.08); }
+
+/* document header row: sticks while its sections scroll past */
+.dg-tr.l1 { grid-template-columns:minmax(0,1fr) auto; gap:9px; position:sticky; top:0; z-index:1;
+  background:var(--surface); font-weight:600; padding:9px 6px 8px; margin-top:4px;
+  border-bottom:1px solid var(--line); border-radius:0; }
+.dg-tr.l1:first-child { margin-top:0; }
+.dg-tr.l1:hover { background:var(--surface); }
+.dg-tr.l1 .src { color:var(--dim); }
+.dg-tr.l2 { padding-left:14px; }
+.dg-tr.l3 { padding-left:38px; }
+.dg-tr.l3 .nm .tt { color:var(--muted); }
+.dg-tr.added { background:rgba(53,208,127,0.07); }
+.dg-tr.off .nm .tt { text-decoration:line-through; color:var(--dim); }
+.dg-tr.off .src { opacity:0.5; }
+.dg-tr.drop { background:rgba(255,91,91,0.07); }
 .dg-tr.dragover { outline:1px dashed var(--accent); outline-offset:-1px; }
-.dg-tr .rename { flex:1 1 auto; min-width:0; background:var(--surface2); border:1px solid var(--accent); color:var(--ink); border-radius:6px; padding:4px 7px; font-family:var(--mono); font-size:11.5px; }
+.dg-tr .rename { min-width:0; background:var(--surface2); border:1px solid var(--accent);
+  color:var(--ink); border-radius:6px; padding:4px 7px; font-family:var(--mono); font-size:11.5px; }
+
+/* right rail */
+.dg-side { display:flex; flex-direction:column; gap:12px; position:sticky; top:0;
+  max-height:calc(100vh - 40px); overflow-y:auto; overflow-x:hidden; }
+.dg-side .dg-chk { margin-bottom:6px; }
+.dg-side .dg-chk:last-child { margin-bottom:0; }
+.dg-actions { display:flex; flex-direction:column; gap:9px; }
+.dg-actions .primary.big { padding:11px 14px; font-size:12.5px; }
+.dg-stat { display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+  padding:5px 0; font-size:11.5px; color:var(--muted); }
+.dg-stat b { font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; text-align:right; }
+.dg-stat.big b { font-size:15px; }
+
+/* survey findings: a wide grid under both columns. Ten sentences in a 300px rail wrap into
+   forty lines and leave half the page empty. */
+.dg-collapse { display:flex; align-items:center; gap:9px; width:100%; background:none; border:none;
+  padding:0 0 2px; text-align:left; color:var(--ink); }
+.dg-facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(310px,1fr)); gap:4px 18px; margin-top:9px; }
+.dg-fact { display:flex; align-items:flex-start; gap:8px; padding:4px 0; font-size:11.5px;
+  color:var(--ink); line-height:1.55; }
+.dg-fact i { font-style:normal; width:14px; flex:0 0 auto; text-align:center; color:var(--done); }
+.dg-fact.warn i { color:var(--error); }
 
 /* approved banner + toast */
-.dg-banner { display:flex; align-items:center; gap:14px; flex-wrap:wrap; background:rgba(53,208,127,0.09);
-  border:1px solid rgba(53,208,127,0.4); border-radius:10px; padding:12px 14px; }
-.dg-banner > div:first-child { flex:1 1 320px; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.dg-banner { display:flex; align-items:center; gap:14px; flex-wrap:wrap; background:rgba(53,208,127,0.08);
+  border:1px solid rgba(53,208,127,0.35); border-radius:10px; padding:11px 14px; }
+.dg-banner-t { flex:1 1 320px; min-width:0; display:flex; flex-direction:column; gap:3px; }
 .dg-banner b { color:var(--done); }
-.dg-banner span { color:var(--muted); font-size:11px; line-height:1.55; }
+.dg-banner span { color:var(--muted); font-size:11px; line-height:1.5; }
 .dg-banner-acts { display:flex; gap:7px; flex-wrap:wrap; }
 .dg-toast { background:rgba(53,208,127,0.12); border:1px solid rgba(53,208,127,0.4); color:var(--ink);
   border-radius:8px; padding:8px 11px; font-size:11.5px; }
 .dg-note.warn { border-color:rgba(255,91,91,0.5); color:var(--ink); }
-.dg-side { display:flex; flex-direction:column; gap:11px; }
-.dg-stat { display:flex; justify-content:space-between; align-items:baseline; padding:5px 0; font-size:11.5px; color:var(--muted); }
-.dg-stat b { font-weight:600; color:var(--ink); font-variant-numeric:tabular-nums; }
-.dg-fact { display:flex; align-items:flex-start; gap:8px; padding:4px 6px; font-size:11.5px; color:var(--ink); }
-.dg-fact i { font-style:normal; width:14px; flex:0 0 auto; text-align:center; color:var(--done); }
-.dg-fact.warn i { color:var(--error); }
-.dg textarea.dg-inp { resize:vertical; line-height:1.5; }
 
 /* dialogs */
 .dg-dlgbg { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:30; padding:20px; }
@@ -198,18 +241,21 @@
 .dg-dlg-f { display:flex; justify-content:flex-end; gap:8px; padding-top:2px; }
 .dg .primary.danger { background:var(--error); color:#fff; }
 
-/* responsive: the sidebar drops under the tree before anything is forced to scroll sideways */
-@media (max-width:1100px) {
+/* responsive: the rail drops under the outline before anything is forced to scroll sideways */
+@media (max-width:1240px) {
   .dg-outline { grid-template-columns:minmax(0,1fr); }
-  .dg-tree { max-height:none; }
-  .dg-side { flex-direction:row; flex-wrap:wrap; }
-  .dg-side > * { flex:1 1 260px; }
+  .dg-side { position:static; max-height:none; flex-direction:row; flex-wrap:wrap; }
+  .dg-side > * { flex:1 1 280px; }
+  .dg-tr .src em { max-width:150px; }
 }
-@media (max-width:760px) {
+@media (max-width:820px) {
   .dg { padding:12px 12px 24px; }
-  .dg-tr .src { display:none; }            /* the path is still in the row's title tooltip */
-  .dg-tr.l2 { padding-left:14px; }
-  .dg-tr.l3 { padding-left:26px; }
+  .dg-tr { grid-template-columns:14px 24px minmax(0,1fr) auto; }
+  .dg-tr .src { display:none; }          /* the paths stay in the row's tooltip */
+  .dg-tr.l2 { padding-left:8px; }
+  .dg-tr.l3 { padding-left:22px; }
+  .dg-toolgrp-r { margin-left:0; }
   .dg-side > * { flex:1 1 100%; }
+  .dg-facts { grid-template-columns:1fr; }
   .dg-head { gap:8px; }
 }
