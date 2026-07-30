@@ -23,12 +23,13 @@ export default function DocJobs({ project }) {
   const [settings, setSettings] = useState(null);
   const [view, setView] = useState({ name: "list" });
   const [storage, setStorage] = useState(null);
+  const [cli, setCli] = useState(null);
   const [err, setErr] = useState("");
 
   const loadJobs = useCallback(() => {
     fetch(`/api/projects/${project.id}/doc-jobs`).then((r) => r.json()).then((d) => {
       if (d.error) return setErr(d.error);
-      setJobs(d.jobs || []); setStorage(d.storage || null);
+      setJobs(d.jobs || []); setStorage(d.storage || null); setCli(d.cli || null);
     }).catch((e) => setErr(String(e.message)));
   }, [project.id]);
 
@@ -101,6 +102,7 @@ export default function DocJobs({ project }) {
 
       {err && <div className="dg-err">{err}</div>}
       {storage?.error && <div className="dg-err">{storage.error}</div>}
+      {cli && !cli.ok && <div className="dg-err">⚠ {cli.hint} — khảo sát sẽ không chạy được cho tới khi sửa.</div>}
 
       {!jobs.length ? (
         <p className="dg-muted">Chưa có bộ tài liệu nào. Bấm <b>＋ Bộ tài liệu mới</b> để chọn chuẩn,
