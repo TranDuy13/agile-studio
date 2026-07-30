@@ -122,6 +122,17 @@
 .dg-tone-block ul, .dg-tone-block ol { margin:0; padding-left:18px; }
 .dg-tone-block li { font-size:11.5px; line-height:1.62; color:var(--ink); margin-bottom:4px; }
 .dg-tone-block code { background:var(--surface2); border-radius:4px; padding:1px 4px; }
+/* four tones on the same paragraph, for picking fast once the three-kind preview has taught
+   that only `explanation` moves */
+.dg-tone-cmp { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px; }
+.dg-tone-col { display:flex; flex-direction:column; gap:6px; text-align:left; background:var(--bg);
+  border:1px solid var(--line); border-radius:8px; padding:10px 11px; color:var(--ink); }
+.dg-tone-col:hover { border-color:var(--accent); }
+.dg-tone-col.on { border-color:rgba(124,156,255,0.6); background:var(--surface2); }
+.dg-tone-col-h { display:flex; align-items:center; gap:7px; }
+.dg-tone-col-h b { font-weight:600; font-size:11.5px; }
+.dg-tone-col p { margin:0; font-size:11px; line-height:1.6; color:var(--muted); }
+.dg-tone-col.on p { color:var(--ink); }
 
 /* ── Outline screen ────────────────────────────────────────────────────────────────────────
    The outline is the subject: it takes the width. The rail holds only decisions and sticks to
@@ -181,6 +192,10 @@
 .dg-tr.l1 .src { color:var(--dim); }
 .dg-tr.l2 { padding-left:14px; }
 .dg-tr.l3 { padding-left:38px; }
+.dg-tr.l4 { padding-left:62px; }
+.dg-tr.l4 .nm .tt { color:var(--muted); }
+.dg-depth { display:inline-flex; align-items:center; gap:5px; font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.1em; }
+.dg-depth select { padding:2px 5px; font-size:10.5px; }
 .dg-tr.l3 .nm .tt { color:var(--muted); }
 .dg-tr.added { background:rgba(53,208,127,0.07); }
 .dg-tr.off .nm .tt { text-decoration:line-through; color:var(--dim); }
@@ -254,6 +269,7 @@
   .dg-tr .src { display:none; }          /* the paths stay in the row's tooltip */
   .dg-tr.l2 { padding-left:8px; }
   .dg-tr.l3 { padding-left:22px; }
+  .dg-tr.l4 { padding-left:34px; }
   .dg-toolgrp-r { margin-left:0; }
   .dg-side > * { flex:1 1 100%; }
   .dg-facts { grid-template-columns:1fr; }
