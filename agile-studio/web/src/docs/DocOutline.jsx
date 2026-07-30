@@ -331,7 +331,7 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
       <TokenConfirm open={!!ask} kind={ask || "write"} settings={settings}
         tokens={ask === "revise" ? (est?.revise || 0) : writeTokens}
         account={est?.account} usage={est?.usage} spent={job?.metrics?.tokens || 0}
-        onCancel={() => setAsk(null)}
+        onSettings={onSettings} onCancel={() => setAsk(null)}
         onConfirm={(dontAsk) => {
           const kind = ask; setAsk(null);
           if (dontAsk) onSettings({ dontAsk: { ...(settings?.dontAsk || {}), [kind]: true } });
