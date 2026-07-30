@@ -1,47 +1,20 @@
-// Seed the docgen board with representative data, so every screen can be inspected without
-// running a real survey (which costs tokens and a few minutes).
+// Representative data for the docgen board, so every screen can be inspected without running a
+// real survey (which costs tokens and a few minutes).
 //
-//   node server/docgen/seed.js            → seeds into the first project in the store
-//   node server/docgen/seed.js 3          → seeds into project #3
-//   node server/docgen/seed.js --clear    → removes seeded jobs and presets, leaves real ones
+// Preferred way — through the running app, no file contention:
+//   curl -X POST http://localhost:4311/api/projects/1/doc-seed
+//   curl -X POST "http://localhost:4311/api/projects/1/doc-seed?clear=1"
 //
-// Seeded rows carry `seeded: true` so --clear never touches anything a real run produced.
-// All content is invented: a fictional order service, fictional file paths, fictional people.
-import { store } from "../store.js";
+// Offline way — only with Agile Studio STOPPED, otherwise the running server holds an older copy
+// of docgen.json in memory and will write over what was just seeded:
+//   node server/docgen/seed.js [projectId] [--clear] [--force]
+//
+// Seeded rows carry `seeded: true` so clearing never touches anything a real run produced.
+// All content is invented: a fictional order service, fictional paths, fictional people.
 import { docgenStore } from "../store/docgen.js";
 import { getStandard } from "./standards/index.js";
-import { buildPlan } from "./plan.js";
-import { planStats } from "./plan.js";
+import { buildPlan, planStats } from "./plan.js";
 
-const args = process.argv.slice(2);
-const clear = args.includes("--clear");
-const projectArg = args.find((a) => !a.startsWith("--"));
-
-function pickProject() {
-  const list = store.listProjects();
-  if (!list.length) {
-    console.error("Chưa có project nào trong Studio. Thêm một project rồi chạy lại.");
-    process.exit(1);
-  }
-  if (projectArg) {
-    const p = list.find((x) => String(x.id) === String(projectArg));
-    if (!p) { console.error(`Không thấy project #${projectArg}. Có: ` + list.map((x) => `${x.id}=${x.name}`).join(", ")); process.exit(1); }
-    return p;
-  }
-  return list[0];
-}
-
-if (clear) {
-  let n = 0;
-  for (const j of docgenStore.listJobs()) if (j.seeded) { docgenStore.deleteJob(j.id); n++; }
-  let p = 0;
-  for (const preset of docgenStore.listPresets()) if (preset.seeded) { docgenStore.deletePreset(preset.id); p++; }
-  docgenStore.flush();
-  console.log(`Đã xoá ${n} bộ tài liệu mẫu và ${p} preset mẫu.`);
-  process.exit(0);
-}
-
-const project = pickProject();
 const days = (n) => Date.now() - n * 864e5;
 
 // --- what the surveying agent would have answered for an order service -----------------------
@@ -89,7 +62,7 @@ const HISTORY = [
   { date: new Date(days(9)).toISOString().slice(0, 10), version: "1.0", change: "Khởi tạo", by: "Nguyễn An" },
 ];
 
-function baseJob(over) {
+function baseJob(project, over) {
   return {
     projectId: project.id, projectName: project.name, seeded: true,
     sources: { main: { projectId: project.id, path: project.repo_path }, extra: [] },
@@ -104,83 +77,134 @@ function baseJob(over) {
   };
 }
 
-const made = [];
-
-// 1) waiting at the approval gate — the screen D1 is really about
-{
-  const std = getStandard("arc42");
-  const job = docgenStore.createJob(baseJob({
-    name: "Software Architecture Document", standardId: "arc42", status: "plan-review",
-    facts: { stack: SURVEY.stack, items: SURVEY.facts },
-    survey: { startedAt: days(1), finishedAt: days(1), elapsedMs: 252000, tokens: 186400,
-      account: "default", activity: "" },
-    metrics: { sections: 0, done: 0, tokens: 186400, elapsedMs: 252000 },
-  }));
-  const plan = buildPlan({ std, projectName: project.name, survey: SURVEY });
-  docgenStore.putPlan(job.id, plan);
-  const st = planStats(plan, "detailed");
-  docgenStore.patchJob(job.id, { metrics: { ...job.metrics, sections: st.sections, tokens: 186400 } });
-  made.push(`${job.id}  plan-review   arc42       ${st.sections} mục bật / ${st.total}`);
+export function clearSeed() {
+  let jobs = 0, presets = 0;
+  for (const j of docgenStore.listJobs()) if (j.seeded) { docgenStore.deleteJob(j.id); jobs++; }
+  for (const p of docgenStore.listPresets()) if (p.seeded) { docgenStore.deletePreset(p.id); presets++; }
+  docgenStore.flush();
+  return { jobs, presets };
 }
 
-// 2) approved and frozen, six files — shows the card with a file list and the read-only outline
-{
-  const std = getStandard("iso15289");
-  const job = docgenStore.createJob(baseJob({
-    name: "Life-cycle Information Items", standardId: "iso15289", status: "plan-approved",
-    facts: { stack: SURVEY.stack, items: SURVEY.facts.slice(0, 4) },
-    survey: { startedAt: days(3), finishedAt: days(3), elapsedMs: 418000, tokens: 372900, account: "default", activity: "" },
-    style: { templateId: null, templatePath: "", tone: "academic", language: "vi-keep-en", depth: "standard" },
-  }));
-  const plan = buildPlan({ std, projectName: project.name, survey: null });
-  // a few sections switched off by hand before approval, so the frozen denominator is visible
-  for (const [docKey, num] of [["config-mgmt", "6"], ["operations", "7"], ["repo-structure", "5"]]) {
-    const s = plan.docs.find((d) => d.key === docKey)?.sections.find((x) => x.num === num);
-    if (s) { s.enabled = false; s.userEnabled = false; }
+export function seedDocgen(project) {
+  const made = [];
+
+  // 1) waiting at the approval gate — the screen D1 is really about
+  {
+    const std = getStandard("arc42");
+    const job = docgenStore.createJob(baseJob(project, {
+      name: "Software Architecture Document", standardId: "arc42", status: "plan-review",
+      facts: { stack: SURVEY.stack, items: SURVEY.facts },
+      survey: { startedAt: days(1), finishedAt: days(1), elapsedMs: 252000, tokens: 186400,
+        account: "default", activity: "" },
+      metrics: { sections: 0, done: 0, tokens: 186400, elapsedMs: 252000 },
+    }));
+    const plan = buildPlan({ std, projectName: project.name, survey: SURVEY });
+    docgenStore.putPlan(job.id, plan);
+    const st = planStats(plan, "detailed");
+    docgenStore.patchJob(job.id, { metrics: { ...job.metrics, sections: st.sections, tokens: 186400 } });
+    made.push({ id: job.id, status: "plan-review", standard: "arc42", note: `${st.sections}/${st.total} mục bật` });
   }
-  docgenStore.putPlan(job.id, plan);
-  const st = planStats(plan, "standard");
-  docgenStore.approvePlan(job.id, { engine: "single", estTokens: st.estTokens });
-  docgenStore.patchJob(job.id, { run: { engine: "single" },
-    metrics: { sections: st.sections, done: 0, tokens: 372900, elapsedMs: 418000 } });
-  made.push(`${job.id}  plan-approved iso15289    ${st.sections} mục bật / ${st.total} · 6 tệp`);
-}
 
-// 3) never surveyed — the entry point for "áp preset, không tốn token"
-{
-  const job = docgenStore.createJob(baseJob({
-    name: "User Documentation", standardId: "iso26514", status: "draft",
-    style: { templateId: null, templatePath: "", tone: "detailed", language: "vi-keep-en", depth: "standard" },
-  }));
-  made.push(`${job.id}  draft         iso26514    chưa khảo sát`);
-}
+  // 2) approved and frozen, six files — the card with a file list and the read-only outline
+  {
+    const std = getStandard("iso15289");
+    const job = docgenStore.createJob(baseJob(project, {
+      name: "Life-cycle Information Items", standardId: "iso15289", status: "plan-approved",
+      facts: { stack: SURVEY.stack, items: SURVEY.facts.slice(0, 4) },
+      survey: { startedAt: days(3), finishedAt: days(3), elapsedMs: 418000, tokens: 372900, account: "default", activity: "" },
+      style: { templateId: null, templatePath: "", tone: "academic", language: "vi-keep-en", depth: "standard" },
+    }));
+    const plan = buildPlan({ std, projectName: project.name, survey: null });
+    // a few sections switched off by hand before approval, so the frozen denominator is visible
+    for (const [docKey, num] of [["config-mgmt", "6"], ["operations", "7"], ["repo-structure", "5"]]) {
+      const s = plan.docs.find((d) => d.key === docKey)?.sections.find((x) => x.num === num);
+      if (s) { s.enabled = false; s.userEnabled = false; }
+    }
+    docgenStore.putPlan(job.id, plan);
+    const st = planStats(plan, "standard");
+    docgenStore.approvePlan(job.id, { engine: "single", estTokens: st.estTokens });
+    docgenStore.patchJob(job.id, { run: { engine: "single" },
+      metrics: { sections: st.sections, done: 0, tokens: 372900, elapsedMs: 418000 } });
+    made.push({ id: job.id, status: "plan-approved", standard: "iso15289",
+      note: `${st.sections}/${st.total} mục bật · 6 tệp` });
+  }
 
-// 4) interrupted — the card that offers "Tiếp tục"
-{
-  const job = docgenStore.createJob(baseJob({
-    name: "Software Requirements Specification", standardId: "iso29148", status: "error",
-    error: { kind: "interrupted", message: "Server khởi động lại khi đang khảo sát — bấm Tiếp tục để chạy lại." },
-    survey: { startedAt: days(0.02), account: "default", activity: "📖 đọc src/api/orders/create.ts" },
-  }));
-  made.push(`${job.id}  error         iso29148    ngắt giữa chừng, có nút Tiếp tục`);
-}
+  // 3) never surveyed — the entry point for "áp preset, không tốn token"
+  {
+    const job = docgenStore.createJob(baseJob(project, {
+      name: "User Documentation", standardId: "iso26514", status: "draft",
+      style: { templateId: null, templatePath: "", tone: "detailed", language: "vi-keep-en", depth: "standard" },
+    }));
+    made.push({ id: job.id, status: "draft", standard: "iso26514", note: "chưa khảo sát" });
+  }
 
-// 5) two presets, so "Áp preset…" is not an empty dropdown
-{
+  // 4) interrupted — the card that offers "Tiếp tục"
+  {
+    const job = docgenStore.createJob(baseJob(project, {
+      name: "Software Requirements Specification", standardId: "iso29148", status: "error",
+      error: { kind: "interrupted", message: "Server khởi động lại khi đang khảo sát — bấm Tiếp tục để chạy lại." },
+      survey: { startedAt: days(0.02), account: "default", activity: "📖 đọc src/api/orders/create.ts" },
+    }));
+    made.push({ id: job.id, status: "error", standard: "iso29148", note: "ngắt giữa chừng, có nút Tiếp tục" });
+  }
+
+  // 5) two presets, so "Áp preset…" is not an empty dropdown
   const std = getStandard("arc42");
   const full = buildPlan({ std, projectName: project.name, survey: null });
-  docgenStore.savePreset({ seeded: true, name: "Kiến trúc — bản đầy đủ", standardId: "arc42",
+  const asPreset = (name, isOn) => docgenStore.savePreset({
+    seeded: true, name, standardId: "arc42",
     docs: full.docs.map((d) => ({ key: d.key, sections: d.sections.map((s) => ({
       num: s.num, title: s.title, kind: s.kind, hint: s.hint, required: s.required,
-      accept: s.accept, enabled: true, origin: s.origin })) })) });
-  docgenStore.savePreset({ seeded: true, name: "Kiến trúc — bản rút gọn cho bàn giao", standardId: "arc42",
-    docs: full.docs.map((d) => ({ key: d.key, sections: d.sections.map((s) => ({
-      num: s.num, title: s.title, kind: s.kind, hint: s.hint, required: s.required, accept: s.accept,
-      enabled: !["9", "11", "12"].includes(s.num), origin: s.origin })) })) });
-  made.push("2 preset: “Kiến trúc — bản đầy đủ” và “Kiến trúc — bản rút gọn cho bàn giao”");
+      accept: s.accept, enabled: isOn(s), origin: s.origin })) })),
+  });
+  const presets = [
+    asPreset("Kiến trúc — bản đầy đủ", () => true).name,
+    asPreset("Kiến trúc — bản rút gọn cho bàn giao", (s) => !["9", "11", "12"].includes(s.num)).name,
+  ];
+
+  docgenStore.flush();
+  return { project: { id: project.id, name: project.name }, jobs: made, presets };
 }
 
-docgenStore.flush();
-console.log(`Đã seed vào project #${project.id} “${project.name}”:`);
-for (const line of made) console.log("  " + line);
-console.log("\nMở tab 📚 Tài liệu của project này để xem. Xoá dữ liệu mẫu: node server/docgen/seed.js --clear");
+// ---- CLI ------------------------------------------------------------------------------------
+// import.meta.main is not available on every Node this app supports, so detect by argv instead.
+const isCli = process.argv[1] && process.argv[1].replace(/\\/g, "/").endsWith("docgen/seed.js");
+if (isCli) {
+  const args = process.argv.slice(2);
+  const force = args.includes("--force");
+  const { store } = await import("../store.js");
+
+  // Refuse to fight the running app over the same JSON file — that silently loses whichever
+  // side writes first.
+  if (!force) {
+    const alive = await fetch("http://localhost:4311/api/platform").then(() => true).catch(() => false);
+    if (alive) {
+      console.error("Agile Studio đang chạy ở cổng 4311. Server đó giữ docgen.json trong bộ nhớ nên nó sẽ");
+      console.error("ghi đè phần vừa seed. Chọn một trong hai:");
+      console.error("  · Seed qua app đang chạy:  curl -X POST http://localhost:4311/api/projects/<id>/doc-seed");
+      console.error("  · Hoặc tắt app rồi chạy lại lệnh này (thêm --force nếu chắc chắn muốn bỏ qua cảnh báo).");
+      process.exit(1);
+    }
+  }
+
+  if (args.includes("--clear")) {
+    const r = clearSeed();
+    console.log(`Đã xoá ${r.jobs} bộ tài liệu mẫu và ${r.presets} preset mẫu.`);
+    process.exit(0);
+  }
+
+  const list = store.listProjects();
+  if (!list.length) { console.error("Chưa có project nào trong Studio. Thêm một project rồi chạy lại."); process.exit(1); }
+  const arg = args.find((a) => !a.startsWith("--"));
+  const project = arg ? list.find((x) => String(x.id) === String(arg)) : list[0];
+  if (!project) {
+    console.error(`Không thấy project #${arg}. Có: ` + list.map((x) => `${x.id}=${x.name}`).join(", "));
+    process.exit(1);
+  }
+
+  const out = seedDocgen(project);
+  console.log(`Đã seed vào project #${out.project.id} “${out.project.name}”:`);
+  for (const j of out.jobs) console.log(`  ${j.id}  ${j.status.padEnd(14)} ${j.standard.padEnd(10)} ${j.note}`);
+  console.log("  preset: " + out.presets.join(" · "));
+  console.log("\nMở tab 📚 Tài liệu của project này để xem. Xoá: node server/docgen/seed.js --clear");
+}

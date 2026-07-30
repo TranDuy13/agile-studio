@@ -135,6 +135,22 @@ export function registerDocRoutes(app, broadcast = () => {}) {
     }));
   });
 
+  // Sample data for inspecting the screens without paying for a survey. Going through the running
+  // server (instead of the CLI script) is what keeps a second process from clobbering docgen.json.
+  app.post("/api/projects/:id/doc-seed", async (req, res) => {
+    const p = store.getProject(req.params.id);
+    if (!p) return bad(res, 404, "Không thấy project");
+    const { seedDocgen, clearSeed } = await import("../docgen/seed.js");
+    if (req.query.clear === "1") {
+      const r = clearSeed();
+      broadcast({ type: "doc:job", jobId: null, seeded: true });
+      return res.json({ ok: true, cleared: r });
+    }
+    const out = seedDocgen(p);
+    broadcast({ type: "doc:job", jobId: null, seeded: true });
+    res.json({ ok: true, ...out });
+  });
+
   // ---- jobs ----
   app.get("/api/projects/:id/doc-jobs", (req, res) => {
     const p = store.getProject(req.params.id);
@@ -283,6 +299,23 @@ export function registerDocRoutes(app, broadcast = () => {}) {
     });
     emit(next);
     res.json({ job: withPlanSummary(next), plan: approved, stats });
+  });
+
+  // Unfreezing an approved outline. Allowed, because a plan approved by mistake would otherwise
+  // force the user to rebuild the whole set — but it resets the progress denominator, so the UI
+  // asks first and the section states go back to pending.
+  app.post("/api/doc-jobs/:jid/plan/unlock", (req, res) => {
+    const job = docgenStore.getJob(req.params.jid);
+    if (!job) return bad(res, 404, "Không thấy bộ tài liệu");
+    const plan = docgenStore.getPlan(job.id);
+    if (!plan) return bad(res, 400, "Chưa có dàn ý");
+    if (!plan.approvedAt) return bad(res, 409, "Dàn ý đang mở, không cần mở khoá");
+    for (const d of plan.docs || [])
+      for (const s of d.sections || []) if (s.status === "skipped") s.status = "pending";
+    const next = docgenStore.putPlan(job.id, { ...plan, approvedAt: null });
+    const j = docgenStore.patchJob(job.id, { status: "plan-review" });
+    emit(j);
+    res.json({ job: withPlanSummary(j), plan: next, stats: planStats(next, job.style?.depth) });
   });
 
   app.post("/api/doc-jobs/:jid/plan/revise", (req, res) => {

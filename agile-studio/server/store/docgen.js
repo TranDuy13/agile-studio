@@ -5,7 +5,7 @@
 // is still in review. Keeping docgen in its own file means it runs unchanged on both, and touches
 // zero lines of existing storage code. When the pluggable store lands, only the read/write pair
 // below is swapped for an adapter — the API stays put.
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -31,6 +31,33 @@ const empty = () => ({
 // Everything lives under a single root key, so a future move into the shared store is one splice.
 let data = empty();
 let loadError = null;
+// Guards against a second process (a seed script, a second `npm run dev`) owning the same file:
+// we remember the mtime we last wrote, and ids we deleted on purpose.
+let lastMtime = 0;
+const deletedIds = new Set();
+
+const mtimeNow = () => { try { return statSync(FILE).mtimeMs; } catch { return 0; } };
+
+const BAGS = ["jobs", "plans", "ir", "scores", "findings", "exports", "presets", "templates", "profiles"];
+
+// Someone else wrote the file since our last write: keep their rows we do not know about instead
+// of flattening them. Our own copy wins for ids we both have — we are the process the user is
+// currently talking to.
+function mergeFromDisk() {
+  let disk;
+  try { disk = JSON.parse(readFileSync(FILE, "utf8"))?.docgen; } catch { return; }
+  if (!disk || typeof disk !== "object") return;
+  let added = 0;
+  for (const bag of BAGS) {
+    const theirs = disk[bag] || {};
+    for (const [k, v] of Object.entries(theirs))
+      if (!(k in data[bag]) && !deletedIds.has(k)) { data[bag][k] = v; added++; }
+  }
+  data.seq = Math.max(Number(data.seq) || 1, Number(disk.seq) || 1);
+  data.settings = { ...(disk.settings || {}), ...data.settings };
+  console.warn(`[docgen] ${FILE} bị tiến trình khác ghi (có thể đang chạy hai server, hoặc vừa chạy seed). `
+    + `Đã trộn ${added} bản ghi lạ vào thay vì ghi đè.`);
+}
 
 function load() {
   if (!existsSync(FILE)) return;                       // first run: empty is correct, not an error
@@ -49,14 +76,19 @@ function load() {
   }
 }
 load();
+lastMtime = mtimeNow();
 
 let timer = null, dirty = false;
 function flush() {
   if (timer) { clearTimeout(timer); timer = null; }
   if (!dirty) return;
   dirty = false;
-  try { writeFileSync(FILE, JSON.stringify({ docgen: data }, null, 2)); }
-  catch (e) { console.error("[docgen] không ghi được " + FILE + ": " + e.message); }
+  const m = mtimeNow();
+  if (m && lastMtime && m !== lastMtime) mergeFromDisk();
+  try {
+    writeFileSync(FILE, JSON.stringify({ docgen: data }, null, 2));
+    lastMtime = mtimeNow();
+  } catch (e) { console.error("[docgen] không ghi được " + FILE + ": " + e.message); }
 }
 // Debounced write: a wizard or a drag-and-drop reorder mutates many times per second.
 function persist() {
@@ -96,6 +128,7 @@ export const docgenStore = {
   deleteJob(id) {
     if (!data.jobs[id]) return false;
     delete data.jobs[id];
+    deletedIds.add(id);
     for (const bag of [data.plans, data.ir, data.scores, data.findings, data.exports]) delete bag[id];
     persist();
     return true;
@@ -141,7 +174,7 @@ export const docgenStore = {
   },
   deletePreset(id) {
     if (!data.presets[id]) return false;
-    delete data.presets[id]; persist(); return true;
+    delete data.presets[id]; deletedIds.add(id); persist(); return true;
   },
 
   // ---- settings (token threshold + "đừng hỏi lại" per kind of work) ----
