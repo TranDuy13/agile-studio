@@ -6,7 +6,7 @@
 
 **PM → BA → Solution Architect → Dev → QC → PO** — six AI role‑agents that plan, design, build, test and sign‑off a feature. In parallel. On your own repos. With your own Claude subscription.
 
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-3c873a)](https://nodejs.org)
 [![Claude Code](https://img.shields.io/badge/powered%20by-Claude%20Code-8a5cf6)](https://www.anthropic.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](#contributing)
@@ -90,20 +90,20 @@ flowchart LR
 ## 🚀 Quick start
 
 **Prerequisites**
-- **Node 18+**
+- **Node 22+** and **[Yarn](https://yarnpkg.com) 4** — the repo ships Yarn in `.yarn/releases`, so running `yarn` inside the project just works (no global install; `corepack enable` also picks it up).
 - **[Claude Code](https://www.anthropic.com) CLI** in your `PATH` (`claude --version`), logged in (`claude` → `/login`).
 - A Claude **Pro/Max** subscription (uses your normal login — no API key).
 
 ```bash
 git clone https://github.com/<your-username>/agile-studio.git
 cd agile-studio
-npm install
+yarn install
 
-npm run dev        # backend :4311 + web :5311 (+ Discord bot if configured)
+yarn dev           # backend :4311 + web :5311 (+ Discord bot if configured)
 # open http://localhost:5311
 ```
 
-> `npm run dev:web` runs only the dashboard (no Discord bot).
+> `yarn dev:web` runs only the dashboard (no Discord bot).
 
 **First run**
 1. **+ Project** → pick the repo folder (native folder picker on macOS/Windows/Linux).
@@ -127,7 +127,7 @@ Control everything from your phone — no port‑forwarding needed (the bot dial
      "prefix": "!"
    }
    ```
-3. `npm run dev` (or `npm run bot`).
+3. `yarn dev` (or `yarn bot`).
 
 **Slash commands** (with autocomplete): `/run` · `/sessions` · `/detail` · `/queue` · `/resume` · `/pause` · `/schedule` · `/accounts` …
 **Buttons & modals**: tap **▶ Run feature** on a project, fill in a form, and a session starts. Every notification carries **⏸ Pause / ▶ Resume / 🗑 Delete** buttons. Turn on **📡 stream log** to pipe a session's live activity into its **own Discord thread** (so sessions never mix).

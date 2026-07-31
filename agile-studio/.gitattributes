@@ -1,0 +1,5 @@
+# Yarn 4 release binary: no EOL conversion, don't show in diffs
+.yarn/releases/** binary
+
+# Lockfile: stable LF across macOS / Linux / Windows
+yarn.lock text eol=lf
