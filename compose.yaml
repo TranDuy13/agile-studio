@@ -1,0 +1,54 @@
+# Agile Studio bằng Docker.
+#
+#   cp .env.docker.example .env      # sửa đường dẫn cho đúng máy bạn
+#   docker compose up -d --build     # rồi mở http://localhost:4311
+#
+# Một service là đủ: app không có DBMS — `server/store.js` ghi JSON vào ~/.agile-studio.
+# (Biến DATABASE_URL / STORAGE_DRIVER trong .env cũ là tàn dư, không dòng mã nào đọc chúng.)
+
+# Cố định tên project: nếu để Compose suy ra từ tên thư mục thì clone repo vào thư mục tên khác
+# sẽ thành một bộ container/volume khác, và dữ liệu Studio "biến mất" một cách khó hiểu.
+name: agile-studio
+
+services:
+  studio:
+    build:
+      context: ./agile-studio
+      args:
+        # Ghim phiên bản CLI ở .env khi muốn build lặp lại được y hệt.
+        CLAUDE_CLI_VERSION: ${CLAUDE_CLI_VERSION:-latest}
+    image: agile-studio:local
+    container_name: agile-studio
+    restart: unless-stopped
+
+    ports:
+      # Chỉ nghe trên loopback: Studio chạy được lệnh tuỳ ý trên repo của bạn bằng chính
+      # đăng nhập Claude của bạn, và KHÔNG có xác thực người dùng. Đừng phơi nó ra LAN.
+      - "127.0.0.1:${STUDIO_PORT:-4311}:4311"
+
+    environment:
+      TZ: ${TZ:-Asia/Ho_Chi_Minh}
+      # Điền khi muốn bot Discord chạy trong container (xem BOT.md).
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      DISCORD_CHANNEL: ${DISCORD_CHANNEL:-}
+
+    volumes:
+      # 1) Đăng nhập Claude Code. Đây là thứ khiến container gọi được agent bằng tài khoản của bạn.
+      #    macOS lưu credential trong Keychain chứ không trong thư mục này → xem README, phải
+      #    `claude /login` một lần bên trong container.
+      - ${CLAUDE_DIR:-${HOME}/.claude}:/home/node/.claude
+
+      # 2) Repo của bạn. Studio phải ĐỌC và GHI được (agent sửa mã, docgen ghi exports/),
+      #    nên mount đọc-ghi. Chỉ mount đúng thư mục chứa repo cần dùng, đừng mount cả ổ đĩa.
+      - ${REPOS_DIR:-${HOME}/repos}:/repos
+
+      # 3) Dữ liệu Studio: danh sách project, phiên chạy, log, thư mục config của account phụ.
+      #    Volume có tên → `docker compose down` không mất, `down -v` mới xoá.
+      - studio-data:/home/node/.agile-studio
+
+    # Agent sinh ra cây tiến trình (claude → node → …). Không có init thì tiến trình mồ côi
+    # tích lại thành zombie trong container chạy nhiều ngày.
+    init: true
+
+volumes:
+  studio-data:

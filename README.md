@@ -112,6 +112,37 @@ yarn dev           # backend :4311 + web :5311 (+ Discord bot if configured)
 
 ---
 
+## 🐳 Run with Docker
+
+One container, one port. The image ships Node, the **Claude Code CLI**, Python + `python-docx`
+(for `.docx` export) and `git` — nothing to install on your machine but Docker.
+
+```bash
+cp .env.docker.example .env    # then set CLAUDE_DIR and REPOS_DIR to real paths
+docker compose up -d --build
+# open http://localhost:4311
+```
+
+Three things get mounted from your machine:
+
+| Mount | What it is |
+|---|---|
+| `CLAUDE_DIR` → `/home/node/.claude` | your Claude Code login — **no token is ever baked into the image** |
+| `REPOS_DIR` → `/repos` | the folder holding the repos Studio may read **and write** |
+| `studio-data` (named volume) | projects, sessions, logs — survives `down`, only `down -v` wipes it |
+
+> **Add projects as `/repos/<repo-name>`** — paths inside the container are not your host paths.
+> The native folder picker has no dialog to open inside a container, so type the path instead.
+>
+> **On macOS** the CLI keeps credentials in the Keychain, not in `~/.claude`, so the mount carries
+> nothing: run `docker compose exec studio claude` and `/login` once. The credential lands in the
+> named volume and stays there.
+
+The port is published on `127.0.0.1` on purpose: Studio runs arbitrary commands on your repos with
+your Claude login and has **no user authentication**. Don't expose it to your LAN.
+
+---
+
 ## 🤖 Discord bot (optional but delightful)
 
 Control everything from your phone — no port‑forwarding needed (the bot dials *out* to Discord).

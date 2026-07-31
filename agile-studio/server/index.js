@@ -1037,5 +1037,22 @@ function hintFor(kind) {
   return "";
 }
 
-const PORT = 4311;
-http.listen(PORT, () => console.log(`Agile Studio API + WS: http://localhost:${PORT}`));
+// Phục vụ web đã build (`yarn build` → web/dist) từ chính tiến trình này, nếu thư mục có mặt.
+// Khi phát triển ở máy thì không có web/dist và vite dev server (:5311) proxy sang đây như cũ —
+// khối này im lặng. Trong container thì ảnh đã build sẵn nên chỉ cần MỘT cổng, không phải dựng
+// thêm nginx chỉ để bê tệp tĩnh và proxy WebSocket.
+// Đặt SAU toàn bộ route `/api`: fallback SPA phải là cái cuối cùng, nếu không nó nuốt luôn API.
+const WEB_DIST = join(APP_ROOT, "web", "dist");
+if (existsSync(WEB_DIST)) {
+  app.use(express.static(WEB_DIST));
+  // Mọi đường dẫn còn lại → index.html để router phía web tự xử. Trừ /api (đã khai ở trên, tới
+  // đây nghĩa là không có route nào khớp → 404 đúng nghĩa) và /ws (WebSocket, không qua express).
+  app.get(/^(?!\/(api|ws)(\/|$)).*/, (req, res) => res.sendFile(join(WEB_DIST, "index.html")));
+}
+
+// Cổng đổi được qua biến môi trường để container ánh xạ cổng mà không phải sửa mã.
+const PORT = Number(process.env.PORT || process.env.SERVER_PORT || 4311);
+// Trong container phải nghe trên 0.0.0.0, nếu không cổng publish ra host sẽ không nối được.
+const HOST = process.env.HOST || "0.0.0.0";
+http.listen(PORT, HOST, () => console.log(`Agile Studio API + WS: http://localhost:${PORT}`
+  + (existsSync(WEB_DIST) ? " (kèm giao diện web)" : "")));
