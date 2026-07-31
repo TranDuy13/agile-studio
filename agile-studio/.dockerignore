@@ -1,0 +1,26 @@
+# Giữ build context nhỏ và sạch. Mọi thứ ở đây hoặc là rác, hoặc là BÍ MẬT không được vào ảnh.
+
+node_modules
+web/dist
+
+# bí mật / cấu hình riêng của máy — không bao giờ bake vào ảnh
+.env
+bot.config.json
+accounts.json
+
+# dữ liệu sinh ra khi chạy ở máy
+projects/
+requirements/
+exports/
+docgen-work/
+
+# không cần cho ảnh chạy
+tests/
+fixtures/
+.skill/
+*.md
+.DS_Store
+.git
+.gitignore
+Dockerfile
+.dockerignore

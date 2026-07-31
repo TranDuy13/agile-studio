@@ -1,0 +1,7 @@
+# `.env` là cấu hình Docker riêng của máy (đường dẫn repo, cổng, token Discord).
+# Mẫu để chép ra: .env.docker.example
+.env
+
+# Yarn 4 là trình quản lý gói của repo — đừng thêm lại package-lock.json,
+# hai tệp lock song song sẽ trôi khỏi nhau.
+package-lock.json
