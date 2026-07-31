@@ -1,0 +1,55 @@
+name: CI
+
+# Chỉ gác nhánh `main`: chạy khi có commit vào main và khi PR nhắm vào main.
+# Nhánh feature tự do — muốn CI chạy sớm thì mở PR nháp (draft) vào main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Chỉ đọc mã nguồn. Không job nào cần quyền ghi.
+permissions:
+  contents: read
+
+# Push liên tiếp vào cùng một nhánh/PR: huỷ lượt cũ, chỉ giữ lượt mới nhất.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # Một ô đỏ không được che kết quả của các ô còn lại — lỗi riêng của Windows
+      # hay riêng của một dòng Node phải nhìn thấy ngay trong cùng một lượt chạy.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # 22/24 là LTS đang hỗ trợ; 26 là bản maintainer thực chạy — CI phải phủ cả ba.
+        node: [22, 24, 26]
+
+    defaults:
+      run:
+        working-directory: agile-studio
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Yarn 4 được ghim qua `packageManager`; Corepack cấp đúng bản, dùng release
+      # đã commit trong `.yarn/releases` (không tải global, không lệch phiên bản).
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install
+        run: yarn install --immutable
+
+      - name: Test
+        run: yarn test
