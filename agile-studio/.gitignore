@@ -9,5 +9,14 @@ accounts.json
 projects/
 requirements/
 
+# Yarn 4 (node-modules linker): commit releases + config + lockfile, ignore the rest
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
 # os
 .DS_Store
