@@ -14,6 +14,7 @@
 import { docgenStore } from "../store/docgen.js";
 import { getStandard } from "./standards/index.js";
 import { buildPlan, planStats } from "./plan.js";
+import { sectionMetrics, jobMetrics } from "./ir.js";
 
 const days = (n) => Date.now() - n * 864e5;
 
@@ -60,6 +61,72 @@ const SURVEY = {
 
 const HISTORY = [
   { date: new Date(days(9)).toISOString().slice(0, 10), version: "1.0", change: "Khởi tạo", by: "Nguyễn An" },
+];
+
+// --- IR for the progress screen (D2) ----------------------------------------------------------
+// Written content for the same fictional order service, so the two progress views, the block
+// viewer, the editor and an export can all be looked at without running a single session.
+const OLD_COMMIT = "a1b2c3d";      // what the sections were "written against"
+const src = (file, from, to) => ({ file, ...(from ? { lines: [from, to || from + 20] } : {}), commit: OLD_COMMIT });
+
+function irFor(num, title, kind) {
+  const base = { doc: "sad", section: num, title, kind, traces: [], sources: [src("src/api/orders/create.ts")] };
+  if (num === "2") {
+    return { ...base, sources: [src("package.json"), src("config/default.yml")], blocks: [
+      { t: "p", text: "Thiết kế phải chạy được trên Node 22 vì tầng hàng đợi dùng API stream của "
+        + "phiên bản này, và phải giữ tương thích với PostgreSQL 14 trở lên.",
+        sources: [src("package.json", 8, 22)] },
+      { t: "table", headers: ["Ràng buộc", "Giá trị", "Nơi khai báo"],
+        rows: [["Runtime", "Node 22 LTS", "package.json → engines"],
+          ["Cơ sở dữ liệu", "PostgreSQL ≥ 14", "config/default.yml"],
+          ["Hàng đợi", "Redis 7 (BullMQ)", "config/queue.yml"]],
+        widths: [1.5, 1.6, 2.2], sources: [src("config/default.yml", 1, 40)] },
+    ] };
+  }
+  if (num === "6.2") {
+    return { ...base, blocks: [
+      { t: "p", text: "Endpoint POST /api/orders nhận CreateOrderInput, kiểm tra quyền qua checkPolicy, "
+        + "sinh mã đơn theo cấu hình orders.codePattern rồi ghi hai bảng orders và order_items.",
+        sources: [src("src/api/orders/create.ts", 41, 78)] },
+      { t: "flow", steps: ["nhận request POST /api/orders", "if người gọi chưa đăng nhập",
+        "DB: orders + order_items", "return 201 kèm mã đơn"],
+        caption: "Luồng tạo đơn hàng", alt: "Bốn bước từ nhận request tới khi trả về mã đơn",
+        sources: [src("src/api/orders/create.ts", 41, 120)] },
+      { t: "code", lang: "json", text: '{\n  "orderId": "ORD-000241",\n  "status": "created"\n}',
+        sources: [src("src/api/orders/dto.ts", 12, 24)] },
+      { t: "callout", level: "warn", text: "Nếu tiến trình nền dừng, khách vẫn gửi đơn thành công nhưng "
+        + "đơn không xuất hiện trong danh sách. Dấu hiệu nhận biết là số thông điệp tồn trong hàng đợi tăng dần.",
+        assumption: true },
+    ] };
+  }
+  if (kind === "reference") {
+    return { ...base, blocks: [
+      { t: "p", text: `Mục ${num} liệt kê các thành phần liên quan và giá trị cấu hình tương ứng.`,
+        sources: [src("src/modules/orders/index.ts", 1, 60)] },
+      { t: "table", headers: ["Thành phần", "Trách nhiệm"],
+        rows: [["src/api", "Nhận request, xác thực khuôn dạng"],
+          ["src/modules/orders", "Quy tắc nghiệp vụ của đơn hàng"],
+          ["src/shared/queue", "Đẩy và tiêu thụ thông điệp"]],
+        widths: [1.7, 3.4], sources: [src("src/modules/")] },
+    ] };
+  }
+  return { ...base, blocks: [
+    { t: "p", text: `Mục ${num} giải thích vì sao hệ thống được tổ chức như hiện tại và điều gì `
+      + "sẽ hỏng nếu làm khác đi.", sources: [src("README.md", 1, 40)] },
+    { t: "bullets", items: ["Tách nhận đơn khỏi xử lý đơn để lúc cao điểm việc nhận đơn không bị chậm theo.",
+      "Đánh đổi: đơn có thể được ghi trễ vài giây so với lúc khách bấm gửi."],
+      sources: [src("docs/vision.md")] },
+  ] };
+}
+
+// Which sections of the seeded arc42 set are in which state — this is the shape MH 4 was drawn
+// against: most done, one being written, one hand-edited, one stale, one stuck.
+const IR_PLAN = [
+  ["1", "written"], ["2", "written"], ["3", "written"], ["4", "written"], ["5", "written"],
+  ["5.1", "written"], ["5.2", "written"], ["5.3", "written"],
+  ["6", "written"], ["6.1", "written"], ["6.2", "edited"], ["6.3", "writing"],
+  ["7", "written"], ["8", "stale"], ["8.1", "pending"], ["9", "pending"],
+  ["10", "error"], ["12", "pending"],
 ];
 
 function baseJob(project, over) {
@@ -148,7 +215,67 @@ export function seedDocgen(project) {
     made.push({ id: job.id, status: "error", standard: "iso29148", note: "ngắt giữa chừng, có nút Tiếp tục" });
   }
 
-  // 5) two presets, so "Áp preset…" is not an empty dropdown
+  // 5) mid-write — the screen D2 is really about (MH 4). Content, one section in flight, one
+  //    hand-edited, one stale, one stuck, and an export already on disk.
+  {
+    const std = getStandard("arc42");
+    const job = docgenStore.createJob(baseJob(project, {
+      name: "Software Architecture Document — đang viết", standardId: "arc42", status: "writing",
+      facts: { stack: SURVEY.stack, items: SURVEY.facts },
+      survey: { startedAt: days(2), finishedAt: days(2), elapsedMs: 252000, tokens: 186400,
+        account: "default", activity: "" },
+      write: { startedAt: days(0.03), engine: "per-doc", account: "default",
+        activity: "📖 đọc src/jobs/notify.ts" },
+    }));
+    const plan = buildPlan({ std, projectName: project.name, survey: SURVEY });
+    docgenStore.putPlan(job.id, plan);
+    const st = planStats(plan, "detailed");
+    docgenStore.approvePlan(job.id, { engine: "per-doc", estTokens: st.estTokens });
+
+    const wanted = new Map(IR_PLAN);
+    let done = 0;
+    for (const doc of docgenStore.getPlan(job.id).docs) {
+      for (const s of doc.sections) {
+        const state = wanted.get(String(s.num));
+        if (!state || s.status === "skipped") continue;
+        if (state === "pending" || state === "writing") {
+          docgenStore.patchPlanSection(job.id, s.id, { status: state });
+          continue;
+        }
+        if (state === "error") {
+          docgenStore.patchPlanSection(job.id, s.id, { status: "error",
+            error: "Agent ghi ra tệp nhưng không có khối nội dung nào đọc được." });
+          continue;
+        }
+        const ir = irFor(String(s.num), s.title, s.kind);
+        docgenStore.putIrSection(job.id, `${doc.key}/${s.num}`, ir);
+        const m = sectionMetrics(ir);
+        docgenStore.patchPlanSection(job.id, s.id, {
+          status: state, words: m.words, commit: OLD_COMMIT, writtenAt: days(0.05),
+          ...(state === "edited" ? { edited: true, editedAt: days(0.04) } : {}),
+          // A stale section is one whose sources moved on: the files are recorded so the tooltip
+          // can say which ones, exactly as a real `git diff` pass would.
+          ...(state === "stale" ? { staleFiles: ["src/shared/auth/policy.ts", "src/shared/i18n/index.ts"] } : {}),
+        });
+        done++;
+      }
+    }
+    const roll = jobMetrics(docgenStore.getIr(job.id), docgenStore.getPlan(job.id));
+    docgenStore.patchJob(job.id, { run: { engine: "per-doc" },
+      metrics: { ...roll.total, tokens: 964300, elapsedMs: 2466000 } });
+    docgenStore.addExport(job.id, {
+      format: "docx", destDir: "D:\\tai-lieu\\dich-vu-don-hang", draft: true,
+      python: { bin: "python", version: "3.12.13", docx: "1.2.0" },
+      files: [{ path: "D:\\tai-lieu\\dich-vu-don-hang\\" + project.name + " — Software Architecture v1.0.docx",
+        bytes: 1_842_000, title: "Software Architecture Document",
+        counts: { sections: done, empty: 4, tables: 6, figures: 3 } }],
+      skipped: [], warnings: [], counts: { sections: done, tables: 6, figures: 3 },
+    });
+    made.push({ id: job.id, status: "writing", standard: "arc42",
+      note: `${roll.total.done}/${roll.total.sections} mục có nội dung · 1 sửa tay · 1 đã cũ · 1 lỗi` });
+  }
+
+  // 6) two presets, so "Áp preset…" is not an empty dropdown
   const std = getStandard("arc42");
   const full = buildPlan({ std, projectName: project.name, survey: null });
   const asPreset = (name, isOn) => docgenStore.savePreset({

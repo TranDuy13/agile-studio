@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import TokenConfirm, { TokenChip, fmtTokens, shouldAsk } from "./TokenConfirm.jsx";
 import Dialog, { DialogButtons, Field } from "./Dialog.jsx";
+import RunConsole from "./RunConsole.jsx";
+import { EconomyChip, EconomyDialog, useEconomy } from "./EconomyChip.jsx";
 
 // The approval gate (MH 3): the agent proposes, the user edits, and only then is the outline
 // frozen. Nothing downstream has a stable denominator until this screen is done (Q8).
@@ -35,7 +37,7 @@ function shortSource(p) {
   return parts.length <= 2 ? s : "…/" + parts.slice(-2).join("/");
 }
 
-export default function DocOutline({ jobId, settings, onSettings, onBack, onJobChanged }) {
+export default function DocOutline({ jobId, settings, onSettings, onBack, onJobChanged, onWrite }) {
   const [job, setJob] = useState(null);
   const [plan, setPlan] = useState(null);
   const [stats, setStats] = useState(null);
@@ -52,7 +54,9 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
   const [ask, setAsk] = useState(null);           // token dialog: "revise"
   const [dialog, setDialog] = useState(null);     // { kind, ...state }
   const [showFacts, setShowFacts] = useState(true);
+  const [showLog, setShowLog] = useState(false);
   const planRef = useRef(null);
+  const eco = useEconomy(settings, onSettings);
 
   const load = useCallback(() => {
     fetch(`/api/doc-jobs/${jobId}`).then((r) => r.json()).then((d) => {
@@ -65,6 +69,23 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
     fetch("/api/doc-presets").then((r) => r.json()).then((d) => setPresets(d.presets || [])).catch(() => {});
   }, [jobId]);
   useEffect(load, [load]);
+
+  // Khảo sát chạy ở màn này, nên console phải mở được ở đây — không thể bắt người dùng sang màn
+  // tiến độ (chưa tồn tại khi dàn ý chưa chốt) để xem agent đang đọc tệp nào.
+  const surveying = job?.status === "surveying";
+  useEffect(() => { if (surveying) setShowLog(true); }, [surveying]);
+
+  // Trong lúc khảo sát, dàn ý được ghi khi phiên xong — nên phải nghe WS để tự tải lại.
+  useEffect(() => {
+    let ws;
+    try { ws = new WebSocket(`ws://${location.host.replace("5311", "4311")}`); } catch { return; }
+    ws.onmessage = (m) => {
+      let e; try { e = JSON.parse(m.data); } catch { return; }
+      if (e.type !== "doc:job" || e.jobId !== jobId) return;
+      load();
+    };
+    return () => { try { ws.close(); } catch { /* đã đóng */ } };
+  }, [jobId, load]);
 
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 5000); };
   const approved = !!plan?.approvedAt;
@@ -223,19 +244,30 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
           <p className="dg-muted">Chưa có dàn ý. Cho agent khảo sát mã nguồn để đề xuất, hoặc áp một preset
             đã lưu (không tốn token).</p>
           <div className="dg-row">
-            <button className="primary" onClick={() => fetch(`/api/doc-jobs/${jobId}/survey`, { method: "POST" })
-              .then((r) => r.json()).then((d) => (d.error ? setErr(d.error) : onBack()))}>
-              Khảo sát & đề xuất dàn ý <TokenChip tokens={est?.survey || 0} threshold={settings?.tokenThreshold} />
+            <button className="primary" disabled={surveying}
+              onClick={() => fetch(`/api/doc-jobs/${jobId}/survey`, { method: "POST" })
+                .then((r) => r.json()).then((d) => (d.error ? setErr(d.error) : (setShowLog(true), load())))}>
+              {surveying ? "Đang khảo sát…" : "Khảo sát & đề xuất dàn ý"}{" "}
+              <TokenChip tokens={est?.survey || 0} threshold={settings?.tokenThreshold} />
             </button>
             <select className="dg-inp" value="" onChange={(e) => { applyPreset(e.target.value); e.target.value = ""; }}>
               <option value="">Áp preset…</option>
               {presets.filter((p) => p.standardId === job.standardId)
                 .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
+            <EconomyChip economy={eco.economy} onChange={eco.patch} onConfigure={eco.openDialog} />
+            <span className="dg-spacer" />
+            <button className="mini" onClick={() => setShowLog((v) => !v)}
+              title="Xem trực tiếp agent đang đọc tệp nào">
+              {showLog ? "▾ Ẩn Console" : "▸ Console"}{surveying ? " ●" : ""}
+            </button>
           </div>
           {err && <div className="dg-err">{err}</div>}
+          {showLog && <RunConsole jobId={jobId} variant="inline" live={surveying} />}
         </div>
       )}
+      <EconomyDialog open={eco.dialogOpen} economy={eco.economy}
+        onCancel={eco.closeDialog} onSave={eco.save} />
     </div>
   );
 
@@ -270,10 +302,29 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
           {job?.survey?.tokens ? `${fmtTokens(job.survey.tokens)} tok · ` : ""}
           bản sửa {plan.revision}
         </span>
+        <button className="mini" onClick={() => setShowLog((v) => !v)}
+          title="Xem trực tiếp agent đang làm gì, và dò lại các bước dẫn đến lỗi">
+          {showLog ? "▾ Ẩn Console" : "▸ Console"}{surveying ? " ●" : ""}
+        </button>
       </div>
 
       {toast && <div className="dg-toast">✅ {toast}</div>}
       {err && <div className="dg-err">{err}</div>}
+      {job?.status === "error" && job?.error?.why && (
+        <div className="dg-err">
+          <div>{job.error.message}</div>
+          <div className="dg-errwhy">{job.error.why}</div>
+          {job.error.lastActivity &&
+            <div className="dg-errwhy">Dòng cuối agent kịp phát: <b>{job.error.lastActivity}</b></div>}
+          <div className="dg-row" style={{ marginTop: 6 }}>
+            <button className="mini" onClick={() => setShowLog(true)}>→ Mở Console</button>
+            <button className="mini" onClick={() => window.open(`/api/doc-jobs/${jobId}/log/download`, "_blank")}>
+              ⬇ Tải log
+            </button>
+          </div>
+        </div>
+      )}
+      {showLog && <RunConsole jobId={jobId} variant="inline" live={surveying} />}
       {job?.survey?.warning && <div className="dg-note">⚠ Phiên khảo sát thoát bất thường nhưng vẫn ghi được
         kết quả nên dàn ý dưới đây là hợp lệ. Lý do CLI báo: {job.survey.warning}</div>}
 
@@ -286,7 +337,12 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
           </div>
           <div className="dg-banner-acts">
             <button className="ghost" onClick={onBack}>← Về danh sách</button>
-            <button className="primary" disabled title="Viết nội dung là feature kế tiếp (D2)">▶ Bắt đầu viết</button>
+            {/* The forecast and the token dialog live on the progress screen, so this button only
+                takes you there — it never starts a run behind the user's back. */}
+            <button className="primary" onClick={() => onWrite?.()}
+              title="Sang màn theo dõi tiến độ, nơi có dự báo token và nút bắt đầu">
+              ▶ Bắt đầu viết →
+            </button>
           </div>
         </div>
       )}
@@ -425,11 +481,12 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
                   placeholder="vd: Gộp 6.1 vào mục 8. Tách job nền thành từng job một."
                   onChange={(e) => setRevise(e.target.value)} />
               </div>
-              <button className="ghost" disabled={!revise.trim() || busy === "revise"}
+              <button className="ghost" disabled={!revise.trim() || busy === "revise" || surveying}
                 onClick={() => (shouldAsk("revise", est?.revise || 0, settings) ? setAsk("revise") : runRevise())}>
-                {busy === "revise" ? "Đang gửi…" : "↻ Đề xuất lại dàn ý"}{" "}
+                {busy === "revise" ? "Đang gửi…" : surveying ? "Đang chạy…" : "↻ Đề xuất lại dàn ý"}{" "}
                 <TokenChip tokens={est?.revise || 0} threshold={settings?.tokenThreshold} />
               </button>
+              <EconomyChip economy={eco.economy} onChange={eco.patch} onConfigure={eco.openDialog} />
               <button className="primary big" disabled={busy === "approve" || !count.on}
                 onClick={() => setDialog({ kind: "approve" })}>
                 {busy === "approve" ? "Đang chốt…" : `✔ Duyệt & chốt ${count.on} mục`}
@@ -495,6 +552,9 @@ export default function DocOutline({ jobId, settings, onSettings, onBack, onJobC
         <p>Muốn giữ nguyên bản đã chốt thì bấm Huỷ, rồi <b className="hl">lưu nó thành preset</b> và tạo một
           bộ tài liệu mới từ preset đó.</p>
       </Dialog>
+
+      <EconomyDialog open={eco.dialogOpen} economy={eco.economy}
+        onCancel={eco.closeDialog} onSave={eco.save} />
 
       <TokenConfirm open={!!ask} kind={ask || "revise"} settings={settings}
         tokens={est?.revise || 0} account={est?.account} usage={est?.usage} spent={job?.metrics?.tokens || 0}

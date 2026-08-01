@@ -6,6 +6,7 @@ export const WORK_LABELS = {
   survey: "Khảo sát & đề xuất dàn ý",
   revise: "Đề xuất lại dàn ý",
   write: "Viết nội dung cả bộ",
+  rewrite: "Viết lại các mục đã cũ",
 };
 
 export function fmtTokens(n) {
@@ -23,8 +24,9 @@ export function shouldAsk(kind, tokens, settings) {
 
 // The chip that sits inside a button. Below the threshold it is quiet; above it, it is loud —
 // the colour alone tells you whether pressing will open a dialog.
-export function TokenChip({ tokens, threshold = 50000, free = false }) {
-  if (free) return <span className="tok free">miễn phí</span>;
+// Chỉ hiện ở chỗ THẬT SỰ tiêu token. Không có biến thể "miễn phí": dán nhãn miễn phí lên mọi hành
+// động không gọi model chỉ làm loãng, và làm cái nhãn có token mất trọng lượng.
+export function TokenChip({ tokens, threshold = 50000 }) {
   const hot = Number(tokens) > Number(threshold);
   return <span className={"tok" + (hot ? "" : " lo")}>⛽ ~{fmtTokens(tokens)}</span>;
 }

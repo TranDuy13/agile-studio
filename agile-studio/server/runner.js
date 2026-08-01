@@ -59,32 +59,92 @@ export const ROLE_META = {
 };
 
 // Diễn giải một event stream-json của Claude Code thành activity người đọc được.
-function describe(ev) {
+//
+// `text` là dòng một câu cho thanh trạng thái và LUÔN ngắn — mọi chỗ đang dùng nó (node role,
+// thẻ session) trông đợi như vậy. Khi gọi với verbose, thêm `detail`: tham số tool nguyên vẹn,
+// toàn văn phần Claude nói, kết quả tool trả về. Đó là thứ duy nhất trả lời được "vì sao vướng",
+// nên nó phải nằm ngoài `text` chứ không phải cắt bớt `text`.
+const MAX_DETAIL = 8000;      // đủ cho một lệnh Bash dài hoặc một traceback, không đủ để phình log
+const cut = (s, n = MAX_DETAIL) => {
+  const t = String(s ?? "");
+  return t.length > n ? t.slice(0, n) + `\n… (cắt bớt ${t.length - n} ký tự)` : t;
+};
+
+// Tham số tool, JSON hoá gọn. Nội dung Write có thể là cả một tệp nên cắt riêng, sớm hơn.
+function describeArgs(input) {
+  const i = input || {};
+  const out = {};
+  for (const [k, v] of Object.entries(i)) {
+    if (typeof v === "string") out[k] = cut(v, k === "content" || k === "new_string" || k === "old_string" ? 2000 : 4000);
+    else out[k] = v;
+  }
+  return out;
+}
+
+// Nội dung một tool_result: có thể là chuỗi, có thể là mảng khối text/image.
+function resultText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((c) => (typeof c === "string" ? c : c?.type === "text" ? c.text || "" : `[${c?.type || "?"}]`))
+    .join("\n");
+}
+
+// Export để kiểm thử được bằng event stream-json ghi lại: đây là chỗ dễ vỡ nhất khi Claude Code
+// đổi khuôn dạng, mà chạy thật để kiểm thì tốn token.
+export { describe as describeEvent };
+function describe(ev, verbose = false) {
   if (ev.type === "assistant" && ev.message?.content) {
     for (const b of ev.message.content) {
-      if (b.type === "text" && b.text?.trim()) return { kind: "text", text: b.text.trim().slice(0, 400) };
+      if (b.type === "text" && b.text?.trim()) {
+        const full = b.text.trim();
+        return { kind: "text", text: full.slice(0, 400), ...(verbose ? { detail: cut(full) } : {}) };
+      }
       if (b.type === "tool_use") {
         const t = b.name, i = b.input || {};
-        if (t === "Read")  return { kind: "tool", text: `📖 đọc ${i.file_path || i.path || ""}` };
-        if (t === "Write") return { kind: "tool", text: `✍️ viết ${i.file_path || i.path || ""}` };
-        if (t === "Edit")  return { kind: "tool", text: `✏️ sửa ${i.file_path || i.path || ""}` };
-        if (t === "Bash")  return { kind: "tool", text: `⚙️ chạy: ${(i.command || "").slice(0, 120)}` };
-        if (t === "Glob" || t === "Grep") return { kind: "tool", text: `🔎 tìm ${i.pattern || ""}` };
-        if (t === "Task")  return { kind: "tool", text: `🤝 giao subagent: ${i.subagent_type || i.description || ""}` };
-        return { kind: "tool", text: `🔧 ${t}` };
+        const extra = verbose
+          ? { tool: t, toolId: b.id, detail: cut(JSON.stringify(describeArgs(i), null, 1)) }
+          : {};
+        if (t === "Read")  return { kind: "tool", text: `📖 đọc ${i.file_path || i.path || ""}`, ...extra };
+        if (t === "Write") return { kind: "tool", text: `✍️ viết ${i.file_path || i.path || ""}`, ...extra };
+        if (t === "Edit")  return { kind: "tool", text: `✏️ sửa ${i.file_path || i.path || ""}`, ...extra };
+        if (t === "Bash")  return { kind: "tool", text: `⚙️ chạy: ${(i.command || "").slice(0, 120)}`, ...extra };
+        if (t === "Glob" || t === "Grep") return { kind: "tool", text: `🔎 tìm ${i.pattern || ""}`, ...extra };
+        if (t === "Task")  return { kind: "tool", text: `🤝 giao subagent: ${i.subagent_type || i.description || ""}`, ...extra };
+        return { kind: "tool", text: `🔧 ${t}`, ...extra };
       }
+    }
+  }
+  // Kết quả tool quay về dưới dạng message của "user". Chỉ ai bật verbose mới nhận:
+  // các màn hình cũ chỉ hiển thị một dòng "đang làm gì" nên thêm vào là làm nhiễu.
+  if (verbose && ev.type === "user" && Array.isArray(ev.message?.content)) {
+    for (const b of ev.message.content) {
+      if (b.type !== "tool_result") continue;
+      const body = resultText(b.content);
+      const bad = !!b.is_error;
+      const head = body.split("\n")[0].slice(0, 160);
+      return { kind: bad ? "tool_error" : "tool_result", toolId: b.tool_use_id,
+        text: `${bad ? "✖" : "↩"} ${head || (bad ? "tool báo lỗi" : "tool xong")}`, detail: cut(body) };
     }
   }
   if (ev.type === "result") {
     return { kind: "result", text: ev.subtype === "success" ? "✓ hoàn tất" : `✖ ${ev.subtype}`,
-             usage: ev.usage, cost: ev.total_cost_usd };
+             usage: ev.usage, cost: ev.total_cost_usd,
+             ...(verbose ? { detail: cut(JSON.stringify({ subtype: ev.subtype, usage: ev.usage,
+               cost: ev.total_cost_usd, duration_ms: ev.duration_ms, is_error: ev.is_error }, null, 1)) } : {}) };
+  }
+  if (verbose && ev.type === "system") {
+    return { kind: "system", text: `⚙ ${ev.subtype || "system"}`,
+      detail: cut(JSON.stringify({ subtype: ev.subtype, session_id: ev.session_id, model: ev.model,
+        tools: ev.tools, cwd: ev.cwd, permissionMode: ev.permissionMode }, null, 1)) };
   }
   return null;
 }
 
 // Chạy 1 prompt qua Claude Code trong cwd (repo project), với configDir account đã chọn.
 // onEvent nhận {kind, text, ...} realtime. onSpawn nhận child để orchestrator kill khi tạm dừng.
-export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCommands = true, sessionId, resumeSessionId, onEvent, onSpawn }) {
+// verbose: thêm `detail` vào mỗi event, và phát thêm kind "spawn"/"stderr"/"exit"/"tool_result"/
+// "system". Mặc định TẮT vì các màn hình cũ chỉ hiển thị một dòng activity.
+export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCommands = true, sessionId, resumeSessionId, verbose = false, onEvent, onSpawn }) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     // Chỉ set CLAUDE_CONFIG_DIR khi account KHÁC dir mặc định. Nếu set cho dir mặc định,
@@ -104,6 +164,12 @@ export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCo
     const { bin, useShell } = claudeSpawn();
     const child = spawn(bin, args, { cwd, env, detached: !useShell, shell: useShell });
     onSpawn?.(child);
+    // Dòng lệnh thật đã spawn: khi CLI thoát ≠ 0 mà chưa in gì, đây là bằng chứng duy nhất còn lại.
+    if (verbose) onEvent?.({ kind: "spawn", text: `▶ claude (pid ${child.pid})`,
+      detail: cut([`cwd:     ${cwd}`, `model:   ${model || "(mặc định)"}`,
+        `config:  ${env.CLAUDE_CONFIG_DIR || "(dir mặc định)"}`,
+        `args:    ${args.map((a) => (a === prompt ? `<prompt ${prompt.length} ký tự>` : a)).join(" ")}`,
+        "", "--- prompt ---", prompt].join("\n"), 60000) });
 
     let buf = "";
     let lastResult = null;
@@ -117,20 +183,34 @@ export function runClaude({ prompt, cwd, configDir, model, maxBudgetUsd, allowCo
         if (!line) continue;
         try {
           const ev = JSON.parse(line);
-          const d = describe(ev);
+          const d = describe(ev, verbose);
           if (d) {
             if (d.kind === "result") lastResult = d;
             onEvent(d);
           }
-        } catch { /* dòng không phải json, bỏ qua */ }
+        } catch {
+          // Dòng không phải JSON: bình thường thì bỏ qua, nhưng khi đang soi lỗi thì chính nó
+          // (usage limit, stack trace của CLI) là câu trả lời.
+          if (verbose) onEvent?.({ kind: "stdout", text: stripAnsi(line).slice(0, 200), detail: cut(stripAnsi(line)) });
+        }
       }
     });
 
     let stderr = "";
-    child.stderr.on("data", (c) => (stderr += c.toString()));
+    child.stderr.on("data", (c) => {
+      const s = c.toString();
+      stderr += s;
+      if (verbose) onEvent?.({ kind: "stderr", text: stripAnsi(s).trim().split("\n")[0].slice(0, 200),
+        detail: cut(stripAnsi(s)) });
+    });
 
-    child.on("error", (e) => reject(e));
+    child.on("error", (e) => {
+      if (verbose) onEvent?.({ kind: "exit", text: `✖ không spawn được: ${e.message}`, detail: cut(String(e.stack || e.message)) });
+      reject(e);
+    });
     child.on("close", (code) => {
+      if (verbose) onEvent?.({ kind: "exit", text: code === 0 ? "■ phiên thoát 0" : `✖ phiên thoát ${code}`,
+        code, detail: cut(stripAnsi(stderr) || "(CLI không in gì ra stderr)") });
       if (code === 0) resolve({ result: lastResult });
       else reject(new Error(`claude exited ${code}: ${stripAnsi(stderr).slice(0, 400)}`));
     });

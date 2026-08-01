@@ -30,11 +30,15 @@ export default function Dialog({ open, title, sub, children, footer, onClose, wi
   );
 }
 
-export function DialogButtons({ onCancel, onOk, okLabel = "Đồng ý", okDisabled, danger }) {
+// Bỏ `onOk` để có hộp thoại chỉ-đọc: khi không có gì để lưu thì một nút "Đóng" đúng hơn là một nút
+// "Đồng ý" chẳng làm gì.
+export function DialogButtons({ onCancel, onOk, okLabel = "Đồng ý", cancelLabel = "Huỷ", okDisabled, danger }) {
   return (
     <>
-      <button className="ghost" onClick={onCancel}>Huỷ</button>
-      <button className={danger ? "primary danger" : "primary"} disabled={okDisabled} onClick={onOk}>{okLabel}</button>
+      <button className="ghost" onClick={onCancel}>{cancelLabel}</button>
+      {onOk && (
+        <button className={danger ? "primary danger" : "primary"} disabled={okDisabled} onClick={onOk}>{okLabel}</button>
+      )}
     </>
   );
 }

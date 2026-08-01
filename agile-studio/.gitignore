@@ -10,6 +10,9 @@ accounts.json
 # per-user generated data (keep .skill/ — it's the shareable skill pack)
 projects/
 requirements/
+# tài liệu .docx docgen xuất ra khi phát triển — hàng MB mỗi tệp, không commit
+exports/
+docgen-work/
 
 # Yarn 4 (node-modules linker): commit releases + config + lockfile, ignore the rest
 .yarn/*

@@ -152,6 +152,7 @@ export async function runSurvey({ job, std, repoPath, configDir, model, allowCom
   try {
     ({ result } = await runClaude({
       prompt, cwd: repoPath, configDir, model, allowCommands,
+      verbose: true,          // tham số tool, toàn văn Claude nói, stderr, mã thoát → run.log
       onEvent: (e) => onEvent?.(e), onSpawn,
     }));
   } catch (e) {
