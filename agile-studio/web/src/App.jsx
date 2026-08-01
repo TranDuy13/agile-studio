@@ -11,6 +11,8 @@ import AddProjectModal from "./AddProjectModal.jsx";
 import ScheduleTab from "./ScheduleTab.jsx";
 import DocJobs from "./docs/DocJobs.jsx";
 import { ROLE_ORDER, ROLE_META, presetOf } from "./presets.js";
+import { useHashRoute, buildHash, go, rewriteSeg, withSlug, SEG_PROJECT,
+  rememberRoute, lastRoute, parseHash } from "./router.js";
 
 // Thông báo desktop (nếu user bật + đã cấp quyền).
 function desktopNotify(title, body) {
@@ -25,8 +27,12 @@ const normSession = (d) => ({ ...d, nodes: Object.fromEntries((d.nodes || []).ma
 
 export default function App() {
   const [projects, setProjects] = useState([]);
-  const [active, setActive] = useState(null);
-  const [tab, setTab] = useState("flow");
+  // `active` và `tab` KHÔNG còn là state: chúng suy ra từ URL, nên không thể lệch với thanh địa chỉ
+  // và không thể sống sót qua một lần đổi project (đó là gốc của bug "đổi project mà nội dung bên
+  // phải vẫn của project cũ").
+  const route = useHashRoute();
+  const tab = route.tab;
+  const [routeErr, setRouteErr] = useState("");
   const [sessions, setSessions] = useState({});      // id -> session (nhiều session song song)
   const [selectedId, setSelectedId] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -49,11 +55,61 @@ export default function App() {
     e?.stopPropagation();
     if (!confirm(`Xoá project "${p.name}"?\n\nGỡ khỏi Agile Studio kèm requirement, log, tài liệu đã lưu, session và lịch của nó.\nKhông xoá file trên đĩa.`)) return;
     await fetch(`/api/projects/${p.id}`, { method: "DELETE" });
-    setActive((cur) => (cur?.id === p.id ? null : cur));
+    // `active` is derived from the URL now, so leave the route if we just deleted the open project.
+    if (active?.id === p.id) go("#/", { replace: true });
     setSelectedId(null);
     loadProjects();
   };
   useEffect(loadProjects, [loadProjects]);
+
+  // ---- điều hướng ------------------------------------------------------------------------------
+
+  const projectsLoaded = projects.length > 0;
+  const active = projects.find((p) => Number(p.id) === route.projectId) || null;
+  // Tên bộ tài liệu đang mở, do DocJobs báo lên — chỉ để vá slug trên URL khi bộ bị đổi tên.
+  const [docJobName, setDocJobName] = useState("");
+
+  const navTo = (over) => go(buildHash({
+    projectId: route.projectId, projectName: active?.name,
+    tab: route.tab, view: route.view, jobName: docJobName, ...over,
+  }));
+  // Đổi project: GIỮ tab, nhưng luôn về màn danh sách của tab đó. Giữ tab thì không mất ngữ cảnh
+  // làm việc; về danh sách thì không đời nào hiện được dữ liệu của project vừa rời khỏi.
+  const goProject = (p) => go(buildHash({
+    projectId: p.id, projectName: p.name, tab: route.tab, view: { name: "list" },
+  }));
+  const goTab = (key) => navTo({ tab: key, view: { name: "list" } });
+  const goDocView = (view) => navTo({ tab: "prodocs", view, jobName: view.jobName });
+
+  // Mở app / URL rỗng → về đúng chỗ đóng lại lần trước. Chỉ thử MỘT lần, nếu không thì chủ động
+  // bấm về `#/` cũng bị đá ngược lại ngay.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!projectsLoaded || restoredRef.current) return;
+    restoredRef.current = true;
+    if (route.projectId != null) return;
+    const last = lastRoute();
+    if (last && projects.some((p) => Number(p.id) === parseHash(last).projectId))
+      go(last, { replace: true });
+  }, [projectsLoaded]); // eslint-disable-line
+
+  // Project trong URL không tồn tại (đã xoá, hoặc link từ máy khác) → nói ra rồi về `#/`.
+  // Màn trắng không lời giải thích là cách tệ nhất để trả lời một cái link hỏng.
+  useEffect(() => {
+    // Đã ở `#/` rồi thì KHÔNG đụng vào thông báo: chính lần chạy trước vừa đặt nó rồi chuyển hướng
+    // về đây, xoá bây giờ là người dùng không kịp đọc câu nào.
+    if (route.projectId == null || !projectsLoaded) return;
+    if (active) { setRouteErr(""); return; }
+    setRouteErr(`Không mở được project #${route.projectId} — có thể nó đã bị xoá, hoặc link này của máy khác.`);
+    go("#/", { replace: true });
+  }, [route.projectId, projectsLoaded, active]);
+
+  // Nhớ chỗ đang mở + vá slug khi project bị đổi tên (link cũ vẫn vào đúng, URL tự sửa lại tên mới).
+  useEffect(() => {
+    if (!active) return;
+    rewriteSeg(SEG_PROJECT, withSlug(active.id, active.name));
+    rememberRoute(window.location.hash);
+  }, [active, route.tab, route.view.name, route.view.jobId, docJobName]);
 
   // model active thật + cấu hình mặc định + session đang có
   useEffect(() => {
@@ -135,6 +191,10 @@ export default function App() {
     : [];
   const selected = sessions[selectedId] && sessions[selectedId].projectId === active?.id ? sessions[selectedId] : null;
 
+  // Đổi project là bỏ session đang chọn. Trước đây việc này nằm trong onClick của sidebar; giờ
+  // điều hướng có thể đến từ Back/Forward hay từ một link dán vào, nên phải bám vào route.
+  useEffect(() => { setSelectedId(null); }, [route.projectId]);
+
   // tự chọn session mới nhất của project khi đổi project / khi selected không còn hợp lệ
   useEffect(() => {
     if (!selected && projectSessions.length) setSelectedId(projectSessions[0].id);
@@ -146,7 +206,7 @@ export default function App() {
     fetch(`/api/projects/${active.id}/run`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     }).then((r) => r.json()).then((j) => { if (j.session) setSelectedId(j.session.id); });
-    setModalOpen(false); setTab("flow"); // xem session vừa tạo
+    setModalOpen(false); goTab("flow"); // xem session vừa tạo
   };
   const stopSession = (id) => fetch(`/api/sessions/${id}/stop`, { method: "POST" });
   const resumeSession = (id) => fetch(`/api/sessions/${id}/resume`, { method: "POST" });
@@ -176,15 +236,31 @@ export default function App() {
         <div className="brand">Agile&nbsp;Studio</div>
         <button className="add-proj" onClick={() => setAddProjOpen(true)}>+ Project</button>
         <div className="proj-list">
-          {projects.map((p) => (
-            <div key={p.id} className="proj-row">
-              <button className={"proj" + (active?.id === p.id ? " on" : "")}
-                onClick={() => { setActive(p); setSelectedId(null); }}>
-                <span className="proj-name">{p.name}</span>
-                <span className="proj-path">{p.repo_path}</span>
-              </button>
-              <button className="proj-del" title="Xoá project" onClick={(e) => deleteProject(p, e)}>🗑</button>
-            </div>
+          {/* Server đã đẩy project mẫu xuống cuối; chèn đường phân cách trước cái đầu tiên trong
+              nhóm đó, để nó không bị nhìn như một project thật của người dùng. Project mẫu không cho
+              xoá: Studio dựng lại nó ở lần boot sau, nên nút xoá chỉ gây hiểu nhầm. */}
+          {projects.map((p, i) => (
+            <React.Fragment key={p.id}>
+              {p.demo && !projects[i - 1]?.demo && (
+                <div className="proj-sep" title="Project đi kèm Studio, không phải của bạn">
+                  <span>project mẫu</span>
+                </div>
+              )}
+              <div className="proj-row">
+                <button className={"proj" + (active?.id === p.id ? " on" : "") + (p.demo ? " demo" : "")}
+                  title={p.demo ? p.demoHint : p.repo_path}
+                  onClick={() => goProject(p)}>
+                  <span className="proj-name">
+                    {p.name}
+                    {p.demo && <em className="proj-badge">{p.demoBadge}</em>}
+                  </span>
+                  <span className="proj-path">{p.repo_path}</span>
+                </button>
+                {!p.demo && (
+                  <button className="proj-del" title="Xoá project" onClick={(e) => deleteProject(p, e)}>🗑</button>
+                )}
+              </div>
+            </React.Fragment>
           ))}
           {!projects.length && <p className="empty">Chưa có project. Bấm + Project để thêm.</p>}
         </div>
@@ -194,29 +270,43 @@ export default function App() {
 
       <main className="main">
         {!active ? (
-          <div className="placeholder">Chọn hoặc tạo một project để bắt đầu.</div>
+          <div className="placeholder">
+            {routeErr ? <><b>🔗 {routeErr}</b><br />Chọn một project ở cột trái để tiếp tục.</>
+              : "Chọn hoặc tạo một project để bắt đầu."}
+          </div>
         ) : (
           <>
             <header className="topbar">
               <div className="tabs">
-                <button className={tab === "flow" ? "on" : ""} onClick={() => setTab("flow")}>Sessions</button>
-                <button className={tab === "req" ? "on" : ""} onClick={() => setTab("req")}>Requirement</button>
-                <button className={tab === "docs" ? "on" : ""} onClick={() => setTab("docs")}>Agile</button>
-                <button className={tab === "prodocs" ? "on" : ""} onClick={() => setTab("prodocs")}>📚 Tài liệu</button>
-                <button className={tab === "sched" ? "on" : ""} onClick={() => setTab("sched")}>⏰ Lịch</button>
+                <button className={tab === "flow" ? "on" : ""} onClick={() => goTab("flow")}>Sessions</button>
+                <button className={tab === "req" ? "on" : ""} onClick={() => goTab("req")}>Requirement</button>
+                <button className={tab === "docs" ? "on" : ""} onClick={() => goTab("docs")}>Agile</button>
+                <button className={tab === "prodocs" ? "on" : ""} onClick={() => goTab("prodocs")}>📚 Tài liệu</button>
+                <button className={tab === "sched" ? "on" : ""} onClick={() => goTab("sched")}>⏰ Lịch</button>
               </div>
-              {tab === "flow" && (
-                <>
-                  <button className="new-run" onClick={() => openRun()}>＋ Chạy feature</button>
-                  {runningCount > 0 && <span className="running-badge">▶ {runningCount} đang chạy</span>}
-                </>
-              )}
+              {/* Không có phần tử nào phụ thuộc `tab` ở đây. Nút "＋ Chạy feature" từng đứng chỗ này
+                  và chỉ hiện ở tab Sessions — nó vừa cao hơn nút tab 2px (padding 8px không viền vs
+                  6px + viền), vừa vào/ra khỏi luồng flex, nên topbar nhảy cả chiều cao lẫn chiều
+                  ngang mỗi lần đổi tab. Giờ nút nằm trong vùng nội dung như mọi tab khác. */}
               <button className="gear" title="Cài đặt" onClick={() => setSettingsOpen(true)}>⚙</button>
-              <div className="proj-title">{active.name}</div>
+              <div className="proj-title" title={active.demo ? active.demoHint : active.repo_path}>
+                {active.name}
+                {active.demo && <em className="proj-badge">{active.demoBadge}</em>}
+              </div>
             </header>
 
             {tab === "flow" ? (
               <div className="sessions-view">
+                {/* Hàng tiêu đề của tab, cùng khuôn với `.dg-head` của tab 📚 Tài liệu: tiêu đề ·
+                    phụ đề · spacer · nút chính bên phải. */}
+                <div className="panel-head">
+                  <b className="panel-h1">🧩 Sessions</b>
+                  <span className="panel-sub">mỗi session là một feature · chạy song song được</span>
+                  <span className="panel-spacer" />
+                  {runningCount > 0 && <span className="running-badge">▶ {runningCount} đang chạy</span>}
+                  <button className="new-run" onClick={() => openRun()}>＋ Chạy feature</button>
+                </div>
+
                 <div className="session-grid">
                   {projectSessions.map((s) => (
                     <SessionCard key={s.id} session={s} selected={s.id === selectedId}
@@ -234,7 +324,7 @@ export default function App() {
               <Requirements projectId={active.id} version={reqVersion}
                 onAnalyze={(prefill) => openRun(prefill)} />
             ) : tab === "prodocs" ? (
-              <DocJobs project={active} />
+              <DocJobs project={active} view={route.view} onView={goDocView} onJobName={setDocJobName} />
             ) : tab === "sched" ? (
               <ScheduleTab projects={projects} defaultProjectId={active.id} models={models} version={schedVersion} />
             ) : (

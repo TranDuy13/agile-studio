@@ -24,6 +24,14 @@ export function normalizeSettings(s = {}) {
     switchThreshold: Number(s.switchThreshold) || 90, allowCommands: s.allowCommands !== false };
 }
 
+// Reserved name/path of the demo project Agile Studio provisions itself. Users may not create a
+// clashing project: a name clash makes the docgen guard (which compares by name only) open for a
+// real repo, and a path clash lets ensureDemoProject() on the next boot point back and steal it.
+// Kept here, not imported from docgen/, so the storage layer stays free of feature dependencies.
+const RESERVED_NAME = "stale-demo";
+const RESERVED_DIR_TAIL = "/demo/stale-demo";
+const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
 // Build the store object over an in-memory `data` snapshot. `save` is called after every
 // mutation to schedule persistence (debounced by the caller).
 export function makeStore(data, save) {
@@ -32,13 +40,30 @@ export function makeStore(data, save) {
 
   return {
     listProjects() { return data.projects.slice().reverse(); },
-    addProject(name, repo_path) {
-      if (data.projects.some((p) => p.repo_path === repo_path)) throw new Error("Repo đã tồn tại");
+    // opts.internal: the entry point of ensureDemoProject(), skips the reserved name/path guards.
+    addProject(name, repo_path, opts = {}) {
+      if (data.projects.some((p) => norm(p.repo_path) === norm(repo_path))) throw new Error("Repo đã tồn tại");
+      if (!opts.internal) {
+        if (String(name || "").trim().toLowerCase() === RESERVED_NAME)
+          throw new Error(`Tên “${RESERVED_NAME}” dành cho project mẫu do Studio tự tạo — chọn tên khác.`);
+        if (norm(repo_path).endsWith(RESERVED_DIR_TAIL))
+          throw new Error(`Thư mục này là bản chạy của project mẫu “${RESERVED_NAME}” — chọn thư mục khác.`);
+      }
       const id = nextId();
-      data.projects.push({ id, name, repo_path, created_at: new Date().toISOString() });
+      data.projects.push({ id, name, repo_path, created_at: new Date().toISOString(),
+        ...(opts.internal ? { internal: true } : {}) });
       return w({ lastInsertRowid: id });
     },
     getProject(id) { return data.projects.find((p) => p.id === Number(id)); },
+    // Move a project to a different folder. Needed because a previous session's demo project points
+    // at a temp dir that has been cleaned up; fixing the path in place keeps the id, so every doc set
+    // already created keeps its owner.
+    setProjectPath(id, repo_path) {
+      const p = data.projects.find((x) => x.id === Number(id));
+      if (!p) return null;
+      p.repo_path = repo_path;
+      return w(p);
+    },
     // Remove a project and everything attached to it. Files on disk are left alone:
     // the repo belongs to the user, and a re-added project should find its docs again.
     deleteProject(id) {

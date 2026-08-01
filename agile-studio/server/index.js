@@ -17,6 +17,7 @@ import { resolveWorkspace, buildRolePrompt, learnFromRun, listSkills, roleHasOut
   saveSkill, listDocs, readDoc, writeDoc } from "./scaffold.js";
 import { materializeDocs, syncDocsBack, saveUpload, materializeUpload, removeUpload } from "./workspace.js";
 import { registerDocRoutes } from "./routes/docgen.js";
+import { markAndSortProjects } from "./docgen/demo.js";
 
 const app = express();
 app.use(cors());
@@ -85,7 +86,10 @@ app.post("/api/pick-folder", async (req, res) => {
 // HĐH server (để UI hiển thị gợi ý đúng).
 app.get("/api/platform", (req, res) => res.json({ platform: process.platform }));
 
-app.get("/api/projects", (req, res) => res.json(store.listProjects()));
+// Project mẫu được gắn cờ `demo` và đẩy xuống cuối danh sách, để sidebar tách nó khỏi các project
+// thật bằng một đường phân cách. Sắp ở đây chứ không trong store: thứ tự hiển thị là việc của tầng
+// trình bày, tầng lưu trữ không cần biết project nào là project mẫu.
+app.get("/api/projects", (req, res) => res.json(markAndSortProjects(store.listProjects())));
 app.post("/api/projects", (req, res) => {
   const { name, repo_path } = req.body;
   if (!name || !repo_path) return res.status(400).json({ error: "Cần tên và đường dẫn repo" });

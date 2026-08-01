@@ -17,8 +17,21 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .proj { text-align:left; background:transparent; border:1px solid transparent; border-radius:8px; padding:9px 10px; cursor:pointer; color:var(--ink); font-family:inherit; display:flex; flex-direction:column; gap:2px; }
 .proj:hover { background:var(--surface2); }
 .proj.on { background:var(--surface2); border-color:var(--accent); }
-.proj-name { font-weight:600; }
+.proj-name { font-weight:600; display:flex; align-items:center; gap:6px; min-width:0; }
 .proj-path { font-size:10px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Project mẫu do Studio tự dựng: phải nhận ra ngay là không phải project của người dùng. Đường
+   phân cách + nhãn, chứ không phải màu khác — màu khác dễ bị đọc là "đang lỗi". */
+.proj-sep { display:flex; align-items:center; gap:8px; margin:10px 2px 2px; }
+.proj-sep::after { content:""; flex:1; height:1px; background:var(--line); }
+.proj-sep span { font-size:9px; letter-spacing:0.14em; text-transform:uppercase; color:var(--dim); white-space:nowrap; }
+.proj-badge {
+  font-style:normal; font-size:9px; letter-spacing:0.08em; text-transform:uppercase;
+  color:var(--accent); background:rgba(124,156,255,0.12); border:1px solid rgba(124,156,255,0.35);
+  border-radius:4px; padding:1px 5px; flex:0 0 auto;
+}
+.proj.demo .proj-name { color:var(--muted); }
+.proj.demo.on .proj-name { color:var(--ink); }
 .empty,.muted { color:var(--muted); font-size:12px; }
 
 /* accounts */
@@ -87,13 +100,16 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 /* main */
 .main { display:flex; flex-direction:column; overflow:hidden; }
 .placeholder { margin:auto; color:var(--muted); }
+/* Topbar chỉ còn tabs · ⚙ · tên project — KHÔNG phần tử nào phụ thuộc `tab` (xem App.jsx).
+   Đó là thứ giữ chiều cao đứng yên khi đổi tab; đừng thêm nút chỉ hiện ở một tab vào đây, nút
+   hành động thuộc về vùng nội dung (`.panel-head`). */
 .topbar { display:flex; align-items:center; gap:20px; padding:14px 20px; border-bottom:1px solid var(--line); }
 .tabs { display:flex; gap:4px; }
 .tabs button { background:transparent; border:1px solid var(--line); color:var(--muted); padding:6px 14px; border-radius:7px; cursor:pointer; font-family:inherit; }
 .tabs button.on { color:var(--ink); border-color:var(--accent); background:var(--surface2); }
 .gear { background:var(--surface2); color:var(--muted); border:1px solid var(--line); border-radius:7px; width:32px; height:32px; cursor:pointer; font-size:15px; }
 .gear:hover { border-color:var(--accent); color:var(--ink); }
-.proj-title { margin-left:auto; font-weight:600; }
+.proj-title { margin-left:auto; font-weight:600; display:flex; align-items:center; gap:7px; }
 
 /* docs / skill editor */
 .docs { flex:1; display:grid; grid-template-columns:260px 1fr; overflow:hidden; }
@@ -140,6 +156,13 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .run-bar button.stop { background:var(--error); color:#fff; }
 .run-bar button:disabled { opacity:0.5; cursor:default; }
 
+/* Hàng tiêu đề của một tab, trong vùng nội dung. Cùng khuôn với `.dg-head` của tab 📚 Tài liệu để
+   nút hành động của mọi tab nằm ở cùng một chỗ. */
+.panel-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.panel-h1 { font-weight:600; font-size:14px; }
+.panel-sub { color:var(--muted); font-size:11px; }
+.panel-spacer { margin-left:auto; }
+
 /* new-run button */
 .new-run { background:var(--accent); color:#0a0d18; border:none; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer; font-family:inherit; }
 .new-run:hover { filter:brightness(1.08); }
@@ -168,6 +191,11 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .budget-fld { max-width:130px; }
 .eco-line { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); cursor:pointer; }
 .eco-line input { accent-color:var(--done); }
+/* Ngăn nhóm trong hộp Cài đặt: mục của một feature riêng, lưu vào store khác. */
+.set-sep {
+  margin-top:6px; padding-top:10px; border-top:1px solid var(--line);
+  font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted);
+}
 .modal-foot { display:flex; justify-content:space-between; align-items:center; margin-top:4px; }
 .run-preview { font-size:11px; color:var(--dim); }
 .modal-foot .primary { background:var(--accent); color:#0a0d18; border:none; border-radius:8px; padding:9px 18px; font-weight:600; cursor:pointer; font-family:inherit; }
@@ -405,18 +433,6 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .ftog-emoji { font-size:16px; }
 .ftog-arrow { color:var(--dim); font-size:12px; }
 
-/* ---- responsive: stack sidebar above main on narrow windows (issue #19) ---- */
-/* Stacked, not an off-canvas drawer: both sidebar and main stay visible. */
-@media (max-width: 820px) {
-  .app { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
-  .sidebar { border-right:none; border-bottom:1px solid var(--line); max-height:44vh; overflow:auto; }
-  .acct-row { flex-wrap:wrap; }
-  .topbar { flex-wrap:wrap; gap:10px 14px; }
-  .proj-title { margin-left:0; }
-  .docs { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
-  .docs-list { border-right:none; border-bottom:1px solid var(--line); max-height:38vh; }
-}
-
 /* ---- project row: select + delete ---- */
 .proj-row { display:flex; align-items:stretch; gap:4px; }
 .proj-row .proj { flex:1; min-width:0; }
@@ -486,3 +502,15 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono)
 .eye-btn { background:none; border:1px solid var(--line); border-radius:6px; color:var(--muted); cursor:pointer; font-size:12px; line-height:1; padding:3px 7px; }
 .eye-btn:hover { color:var(--ink); border-color:var(--accent); }
 .integ-target-val { font-size:11px; color:var(--ink); word-break:break-all; white-space:normal; line-height:1.5; font-family:var(--mono); }
+
+/* ---- responsive: stack sidebar above main on narrow windows (issue #19) ---- */
+/* Stacked, not an off-canvas drawer: both sidebar and main stay visible. */
+@media (max-width: 820px) {
+  .app { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+  .sidebar { border-right:none; border-bottom:1px solid var(--line); max-height:44vh; overflow:auto; }
+  .acct-row { flex-wrap:wrap; }
+  .topbar { flex-wrap:wrap; gap:10px 14px; }
+  .proj-title { margin-left:0; }
+  .docs { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+  .docs-list { border-right:none; border-bottom:1px solid var(--line); max-height:38vh; }
+}

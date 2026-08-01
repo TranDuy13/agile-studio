@@ -1,0 +1,14 @@
+{
+  "name": "stale-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Repo mẫu đi kèm Agile Studio — dịch vụ nhắc lịch, dùng để thử tính năng sinh tài liệu",
+  "type": "module",
+  "main": "src/reminders.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/reminders.js"
+  }
+}
